@@ -72,30 +72,71 @@ Builds inject the resolved version into both binaries. You can inspect it with:
 
 ## Quick start
 
-### 1. Install and start the daemon
+### 1. Install the client and optionally start the daemon
+
+To download and run the installer in one step on Unix-like hosts:
 
 ```bash
-./tools/install-symtermd.sh
+curl -fsSL https://raw.githubusercontent.com/theTd/symterm/master/tools/install-symterm.sh | bash
 ```
 
-Use the tracked install template at [tools/install-symtermd.sh](/c:/Users/cui/standalone/symterm/tools/install-symtermd.sh). Fill its placeholders or export the matching environment variables before running it.
+If `curl` is unavailable:
 
-By default, the installer runs an interactive setup wizard for the daemon environment. If an existing install already has `symtermd.env`, the wizard shows those current values as defaults. Use `./tools/install-symtermd.sh --skip-setup-wizard` to reuse the current or pre-exported values without prompting.
+```bash
+wget -qO- https://raw.githubusercontent.com/theTd/symterm/master/tools/install-symterm.sh | bash
+```
 
-`SYMTERMD_REMOTE_ENTRY` must be set before install as a JSON argv array, for example:
+To download and run the installer in one step on Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/theTd/symterm/master/tools/install-symterm.ps1 | iex
+```
+
+If you already have the repository checked out locally, use:
+
+```bash
+./tools/install-symterm.sh
+```
+
+On Windows, use:
+
+```powershell
+.\tools\install-symterm.ps1
+```
+
+Use the tracked installers at [tools/install-symterm.sh](/c:/Users/cui/standalone/symterm/tools/install-symterm.sh) and [tools/install-symterm.ps1](/c:/Users/cui/standalone/symterm/tools/install-symterm.ps1). The default repository is `https://github.com/theTd/symterm/`.
+
+Both installers install the client first. After that they ask whether to install `symtermd`. On Linux, choosing yes continues into daemon setup and service installation. On unsupported platforms, the installer warns and skips daemon installation.
+
+If you choose daemon install on Linux, the installer runs an interactive setup wizard by default. If an existing install already has `symtermd.env`, the wizard shows those current values as defaults. Use `./tools/install-symterm.sh --skip-setup-wizard` to reuse the current or pre-exported values without prompting.
+
+If you plan to install the daemon on Linux, `SYMTERMD_REMOTE_ENTRY` must be set before install as a JSON argv array, for example:
 
 ```bash
 export SYMTERMD_REMOTE_ENTRY='["/usr/bin/env","bash","-lc"]'
 ```
 
-The script is idempotent. Re-running it upgrades or repairs the same daemon install. Before it overwrites the binary, it checks for an already running local `symtermd` service and stops it first, then starts the newly installed version. It prefers:
+For one-step daemon install on Linux, export it before piping the installer:
+
+```bash
+export SYMTERMD_REMOTE_ENTRY='["/usr/bin/env","bash","-lc"]'
+curl -fsSL https://raw.githubusercontent.com/theTd/symterm/master/tools/install-symterm.sh | bash
+```
+
+Optional release overrides:
+
+- `SYMTERM_VERSION=v0.1.4` pins both binaries to a specific release tag instead of `latest`
+- `SYMTERM_REPO=https://github.com/owner/repo/` installs from a different GitHub repository with the same GoReleaser asset naming
+- `SYMTERM_DOWNLOAD_URL` or `SYMTERMD_DOWNLOAD_URL` override either binary source directly
+
+On Unix-like hosts, the script is idempotent. Re-running it upgrades or repairs the same install. Before it overwrites the daemon binary, it checks for an already running local `symtermd` service and stops it first, then starts the newly installed version. It prefers:
 
 - `systemd --user`
 - system `systemd`
 - `init.d/service`
 - background mode
 
-It installs the real binary under `~/.local/lib/symterm/bin/symtermd` by default and also creates a command link, usually `~/.local/bin/symtermd` for user installs or `/usr/local/bin/symtermd` for root installs.
+The Unix installer places real binaries under `~/.local/lib/symterm/bin/` by default and also creates command links, usually `~/.local/bin/symterm` and `~/.local/bin/symtermd` for user installs or `/usr/local/bin/` links for root installs. The Windows installer places `symterm.exe` under `%LOCALAPPDATA%\\symterm\\bin\\`.
 
 On first start, `symtermd` generates and persists its ED25519 SSH host key at:
 
