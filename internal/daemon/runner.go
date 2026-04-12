@@ -140,6 +140,11 @@ func (m *RuntimeManager) launch(
 		failLaunch(err)
 		return
 	}
+	failLaunchWithLogs := func(err error) {
+		diagnostic.Cleanup(diagnostic.Default(), "close stdout log after pre-start failure", stdoutFile.Close())
+		diagnostic.Cleanup(diagnostic.Default(), "close stderr log after pre-start failure", stderrFile.Close())
+		failLaunch(err)
+	}
 
 	commandBinary := entrypoint[0]
 	args := append(append([]string(nil), entrypoint[1:]...), request.Command.ArgvTail...)
@@ -147,14 +152,14 @@ func (m *RuntimeManager) launch(
 	if m.mounts != nil {
 		workdir, err = m.mounts.WorkDir(request.ProjectKey)
 		if err != nil {
-			failLaunch(err)
+			failLaunchWithLogs(err)
 			return
 		}
 	}
 	if request.Command.TmuxStatus {
 		plan, err := buildTmuxLaunchPlan(m.currentAdminSocketPath(), request.ProjectKey, request.Command, entrypoint)
 		if err != nil {
-			failLaunch(err)
+			failLaunchWithLogs(err)
 			return
 		}
 		commandBinary = plan.binary
