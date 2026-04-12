@@ -10,6 +10,7 @@ import (
 	"symterm/internal/buildinfo"
 	adminclient "symterm/internal/cmd/adminclient"
 	clientcmd "symterm/internal/cmd/client"
+	completioncmd "symterm/internal/cmd/completion"
 	setupwizard "symterm/internal/cmd/setupwizard"
 	"symterm/internal/config"
 )
@@ -32,6 +33,12 @@ func main() {
 	case routeAdmin:
 		if err := adminclient.Run(context.Background(), os.Args[2:], os.Stdout, os.Stderr); err != nil {
 			fmt.Fprintf(os.Stderr, "symterm: %v\n", err)
+			os.Exit(3)
+		}
+		return
+	case routeCompletion:
+		if err := completioncmd.Run(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "symterm completion: %v\n", err)
 			os.Exit(3)
 		}
 		return

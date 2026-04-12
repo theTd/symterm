@@ -15,6 +15,7 @@ DAEMON_BIN_PATH="$BIN_DIR/symtermd"
 LOG_PATH="$RUN_DIR/symtermd.log"
 SERVICE_NAME="${SERVICE_NAME:-symtermd}"
 LINK_DIR="${LINK_DIR:-}"
+BASH_COMPLETION_DIR="${BASH_COMPLETION_DIR:-}"
 USER_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 USER_UNIT_PATH="$USER_UNIT_DIR/$SERVICE_NAME.service"
 SYSTEM_UNIT_PATH="/etc/systemd/system/$SERVICE_NAME.service"
@@ -188,6 +189,16 @@ resolve_link_path() {
   fi
 }
 
+resolve_bash_completion_dir() {
+  if [ -n "$BASH_COMPLETION_DIR" ]; then
+    printf '%s\n' "$BASH_COMPLETION_DIR"
+  elif [ "$(id -u)" -eq 0 ]; then
+    printf '%s\n' "/usr/local/share/bash-completion/completions"
+  else
+    printf '%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+  fi
+}
+
 remove_path_if_present() {
   path="$1"
   if [ -e "$path" ] || [ -L "$path" ]; then
@@ -295,8 +306,10 @@ remove_daemon() {
 
 remove_client() {
   client_link_path="$(resolve_link_path "symterm")"
+  bash_completion_path="$(resolve_bash_completion_dir)/symterm"
   remove_path_if_present "$client_link_path"
   remove_path_if_present "$CLIENT_BIN_PATH"
+  remove_path_if_present "$bash_completion_path"
 }
 
 purge_daemon_data() {
@@ -314,6 +327,7 @@ prune_install_tree() {
   prune_dir_if_empty "$RUN_DIR"
   prune_dir_if_empty "$BIN_DIR"
   prune_dir_if_empty "$INSTALL_ROOT"
+  prune_dir_if_empty "$(resolve_bash_completion_dir)"
 }
 
 print_summary() {

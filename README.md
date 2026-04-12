@@ -150,6 +150,8 @@ On Unix-like hosts, the script is idempotent. Re-running it upgrades or repairs 
 
 The Unix installer places real binaries under `~/.local/lib/symterm/bin/` by default and also creates command links, usually `~/.local/bin/symterm` and `~/.local/bin/symtermd` for user installs or `/usr/local/bin/` links for root installs. The Windows installer places `symterm.exe` under `%LOCALAPPDATA%\\symterm\\bin\\`.
 
+On Unix-like hosts, the installer also writes a Bash completion file named `symterm` into the standard `bash-completion` completions directory for that install scope, typically `~/.local/share/bash-completion/completions/` for user installs or `/usr/local/share/bash-completion/completions/` for root installs.
+
 On first start, `symtermd` generates and persists its ED25519 SSH host key at:
 
 ```text
@@ -192,6 +194,7 @@ Root usage:
 ```text
 symterm <remote-argv...>
 symterm run [local-options] -- <remote-argv...>
+symterm completion bash
 symterm admin ...
 symterm setup
 ```
@@ -206,6 +209,12 @@ Use `symterm run [local-options] -- <remote-argv...>` when you need explicit loc
 - `--help`: show client help.
 
 Use `symterm setup` to write local client configuration when the admin has already provided the endpoint and user secret.
+
+Use `symterm completion bash` to print a Bash completion script. For example:
+
+```bash
+source <(symterm completion bash)
+```
 
 If `<remote-argv...>` is omitted, `symterm` still starts the configured remote entrypoint with no extra argv tail.
 

@@ -14,6 +14,7 @@ func TestClassifyCommandRoute(t *testing.T) {
 		{name: "default remote argv", args: []string{"echo", "hi"}, want: routeDefault},
 		{name: "help flag", args: []string{"--help"}, want: routeHelp},
 		{name: "run", args: []string{"run", "--project-id", "demo", "--", "echo"}, want: routeRun},
+		{name: "completion", args: []string{"completion", "bash"}, want: routeCompletion},
 		{name: "setup", args: []string{"setup"}, want: routeSetup},
 		{name: "admin", args: []string{"admin", "users", "list"}, want: routeAdmin},
 		{name: "version", args: []string{"version"}, want: routeVersion},

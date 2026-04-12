@@ -5,6 +5,7 @@ type commandRoute string
 const (
 	routeDefault         commandRoute = "default"
 	routeRun             commandRoute = "run"
+	routeCompletion      commandRoute = "completion"
 	routeSetup           commandRoute = "setup"
 	routeAdmin           commandRoute = "admin"
 	routeVersion         commandRoute = "version"
@@ -25,6 +26,8 @@ func classifyCommandRoute(args []string) commandRoute {
 	switch args[0] {
 	case "run":
 		return routeRun
+	case "completion":
+		return routeCompletion
 	case "setup":
 		return routeSetup
 	case "admin":
@@ -42,6 +45,7 @@ func rootUsage() string {
 	return `Usage:
   symterm <remote-argv...>
   symterm run [local-options] -- <remote-argv...>
+  symterm completion bash
   symterm admin ...
   symterm setup
   symterm version
@@ -49,6 +53,8 @@ func rootUsage() string {
 Commands:
   run
         explicit local-control entrypoint for project flags and command disambiguation
+  completion
+        print shell completion scripts
   admin
         local daemon admin client
   setup

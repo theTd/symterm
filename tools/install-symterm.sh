@@ -15,6 +15,7 @@ SYMTERMD_ADMIN_WEB_ADDR="${SYMTERMD_ADMIN_WEB_ADDR:-127.0.0.1:6040}"
 SYMTERMD_PROJECTS_ROOT="${SYMTERMD_PROJECTS_ROOT:-$HOME/.symterm}"
 SYMTERMD_ALLOW_UNSAFE_NO_FUSE="${SYMTERMD_ALLOW_UNSAFE_NO_FUSE:-0}"
 SYMTERMD_STATIC_TOKENS="${SYMTERMD_STATIC_TOKENS:-}"
+BASH_COMPLETION_DIR="${BASH_COMPLETION_DIR:-}"
 
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/.local/lib/symterm}"
 SERVICE_NAME="${SERVICE_NAME:-symtermd}"
@@ -40,6 +41,7 @@ expand_path() {
 INSTALL_ROOT="$(expand_path "$INSTALL_ROOT")"
 LINK_DIR="$(expand_path "$LINK_DIR")"
 USER_UNIT_DIR="$(expand_path "$USER_UNIT_DIR")"
+BASH_COMPLETION_DIR="$(expand_path "$BASH_COMPLETION_DIR")"
 
 BIN_DIR="$INSTALL_ROOT/bin"
 RUN_DIR="$INSTALL_ROOT/run"
@@ -63,6 +65,7 @@ DAEMON_REQUESTED=0
 DAEMON_INSTALLED=0
 CLIENT_LINK_PATH=""
 DAEMON_LINK_PATH=""
+BASH_COMPLETION_PATH=""
 
 maybe_reexec_with_bash() {
   if [ -n "${BASH_VERSION:-}" ]; then
@@ -335,6 +338,16 @@ resolve_link_path() {
     printf '%s\n' "/usr/local/bin/$resolve_link_name"
   else
     printf '%s\n' "$HOME/.local/bin/$resolve_link_name"
+  fi
+}
+
+resolve_bash_completion_dir() {
+  if [ -n "$BASH_COMPLETION_DIR" ]; then
+    printf '%s\n' "$BASH_COMPLETION_DIR"
+  elif [ "$(id -u)" -eq 0 ]; then
+    printf '%s\n' "/usr/local/share/bash-completion/completions"
+  else
+    printf '%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
   fi
 }
 
@@ -670,6 +683,144 @@ install_background() {
   echo "background" >"$STATE_FILE"
 }
 
+write_builtin_bash_completion() {
+  cat <<'EOF'
+_symterm_has_double_dash() {
+  local i
+  for ((i=1; i<COMP_CWORD; i++)); do
+    if [[ "${COMP_WORDS[i]}" == "--" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+_symterm_complete_run() {
+  local cur prev
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  prev=""
+  if (( COMP_CWORD > 0 )); then
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+  fi
+
+  if _symterm_has_double_dash; then
+    return 0
+  fi
+
+  case "$prev" in
+    --project-id)
+      return 0
+      ;;
+  esac
+
+  COMPREPLY=( $(compgen -W "--project-id --confirm-reconcile --tmux-status -v --verbose --help --" -- "$cur") )
+}
+
+_symterm_complete_admin() {
+  local cur prev
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  prev=""
+  if (( COMP_CWORD > 0 )); then
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+  fi
+
+  case "$prev" in
+    inspect|terminate|create|disable|issue|revoke|get|set)
+      return 0
+      ;;
+  esac
+
+  if (( COMP_CWORD == 2 )); then
+    COMPREPLY=( $(compgen -W "daemon sessions users" -- "$cur") )
+    return 0
+  fi
+
+  case "${COMP_WORDS[2]-}" in
+    daemon)
+      if (( COMP_CWORD == 3 )); then
+        COMPREPLY=( $(compgen -W "info" -- "$cur") )
+      fi
+      return 0
+      ;;
+    sessions)
+      if (( COMP_CWORD == 3 )); then
+        COMPREPLY=( $(compgen -W "list inspect terminate" -- "$cur") )
+      fi
+      return 0
+      ;;
+    users)
+      if (( COMP_CWORD == 3 )); then
+        COMPREPLY=( $(compgen -W "list create disable token entrypoint" -- "$cur") )
+        return 0
+      fi
+      case "${COMP_WORDS[3]-}" in
+        token)
+          if (( COMP_CWORD == 4 )); then
+            COMPREPLY=( $(compgen -W "issue revoke" -- "$cur") )
+          fi
+          return 0
+          ;;
+        entrypoint)
+          if (( COMP_CWORD == 4 )); then
+            COMPREPLY=( $(compgen -W "get set" -- "$cur") )
+          fi
+          return 0
+          ;;
+      esac
+      return 0
+      ;;
+  esac
+}
+
+_symterm_completion() {
+  local cur
+  COMPREPLY=()
+  cur="${COMP_WORDS[COMP_CWORD]}"
+
+  if (( COMP_CWORD == 1 )); then
+    COMPREPLY=( $(compgen -W "run admin setup version completion" -- "$cur") )
+    return 0
+  fi
+
+  case "${COMP_WORDS[1]-}" in
+    run)
+      _symterm_complete_run
+      return 0
+      ;;
+    admin)
+      _symterm_complete_admin
+      return 0
+      ;;
+    setup)
+      if (( COMP_CWORD == 2 )); then
+        COMPREPLY=( $(compgen -W "--help" -- "$cur") )
+      fi
+      return 0
+      ;;
+    completion)
+      if (( COMP_CWORD == 2 )); then
+        COMPREPLY=( $(compgen -W "bash" -- "$cur") )
+      fi
+      return 0
+      ;;
+  esac
+}
+
+complete -F _symterm_completion -o bashdefault -o default symterm
+EOF
+}
+
+install_bash_completion() {
+  completion_dir="$(resolve_bash_completion_dir)"
+  completion_path="$completion_dir/symterm"
+  mkdir -p "$completion_dir"
+  if ! "$CLIENT_BIN_PATH" completion bash >"$completion_path.tmp" 2>/dev/null; then
+    write_builtin_bash_completion >"$completion_path.tmp"
+  fi
+  mv "$completion_path.tmp" "$completion_path"
+  BASH_COMPLETION_PATH="$completion_path"
+}
+
 install_client() {
   source_url="$SYMTERM_DOWNLOAD_URL"
   if ! has_value "$source_url"; then
@@ -677,6 +828,7 @@ install_client() {
   fi
   install_binary_from_source "$source_url" "symterm" "$CLIENT_BIN_PATH"
   CLIENT_LINK_PATH="$(link_command "$CLIENT_BIN_PATH" "symterm")"
+  install_bash_completion
 }
 
 determine_daemon_request() {
@@ -747,6 +899,7 @@ print_summary() {
   echo "repo: $REPO_URL"
   echo "client binary path: $CLIENT_BIN_PATH"
   echo "client command link: $CLIENT_LINK_PATH"
+  echo "bash completion path: $BASH_COMPLETION_PATH"
   if [ "$DAEMON_INSTALLED" -eq 1 ]; then
     echo "daemon binary path: $DAEMON_BIN_PATH"
     echo "daemon command link: $DAEMON_LINK_PATH"
