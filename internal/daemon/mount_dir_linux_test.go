@@ -11,12 +11,12 @@ import (
 func TestParseMountInfoPoint(t *testing.T) {
 	t.Parallel()
 
-	line := `151 29 0:56 / /home/thetd/.symterm/thetd/symterm/mount rw,nosuid,nodev,relatime - fuse.symterm symterm rw,user_id=1000,group_id=1000`
+	line := `151 29 0:56 / /srv/symterm/demo/mount rw,nosuid,nodev,relatime - fuse.symterm symterm rw,user_id=1000,group_id=1000`
 	mountPoint, ok := parseMountInfoPoint(line)
 	if !ok {
 		t.Fatal("parseMountInfoPoint() = false")
 	}
-	if mountPoint != "/home/thetd/.symterm/thetd/symterm/mount" {
+	if mountPoint != "/srv/symterm/demo/mount" {
 		t.Fatalf("mountPoint = %q", mountPoint)
 	}
 }

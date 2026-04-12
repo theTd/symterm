@@ -41,7 +41,7 @@ func TestRegisterOwnerFileClientAssignsAuthoritativeClientForSSHWorkspaceRoot(t 
 	}, proto.HelloRequest{
 		ProjectID:          "demo",
 		TransportKind:      string(TransportKindSSH),
-		LocalWorkspaceRoot: `C:\Users\cui\standalone\symterm`,
+		LocalWorkspaceRoot: `C:\workspace\symterm`,
 		SessionKind:        proto.SessionKindAuthority,
 		WorkspaceDigest:    testWorkspaceDigest(1, "root-a"),
 	})

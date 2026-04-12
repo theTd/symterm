@@ -37,7 +37,7 @@ goreleaser build --snapshot --clean
 .\tools\goreleaser_build_snapshot.ps1
 ```
 
-Current module target is Go `1.25.0` in [go.mod](/c:/Users/cui/standalone/symterm/go.mod).
+Current module target is Go `1.25.0` in [go.mod](go.mod).
 
 CI lives in `.github/workflows/ci.yml` and currently runs:
 
@@ -83,8 +83,8 @@ Platform coverage in the tree relies heavily on build tags such as `linux`, `win
 ### Design patterns
 
 - **Interface-driven wiring**: `control.Service` accepts a `ServiceDependencies` bundle with runtime, diagnostics, clocks, session observers, and tracing hooks.
-- **Use-case surfaces**: [internal/control/service_surfaces.go](/c:/Users/cui/standalone/symterm/internal/control/service_surfaces.go) defines the service interfaces consumed by transport and admin layers.
-- **Generic JSON-RPC dispatch**: [internal/transport/dispatch_routes.go](/c:/Users/cui/standalone/symterm/internal/transport/dispatch_routes.go) uses generic helpers for typed parameter decoding and uniform responses.
+- **Use-case surfaces**: [internal/control/service_surfaces.go](internal/control/service_surfaces.go) defines the service interfaces consumed by transport and admin layers.
+- **Generic JSON-RPC dispatch**: [internal/transport/dispatch_routes.go](internal/transport/dispatch_routes.go) uses generic helpers for typed parameter decoding and uniform responses.
 - **Cursor-based event streaming**: both `eventstream.Store` and admin/project event hubs expose append plus subscribe semantics with cursors.
 - **Owner authority split**: command start, sync, ownerfs, and invalidation paths distinguish between the active authority session and ordinary interactive followers.
 - **Platform abstraction with build tags**: Linux-specific FUSE, mount, and PTY implementations have non-Linux or Windows stubs where needed.
@@ -101,8 +101,8 @@ Platform coverage in the tree relies heavily on build tags such as `linux`, `win
 ## Development Notes
 
 - Prefer maintainability, structural clarity, and readability over minimal patches to legacy code.
-- The repo now depends on more than `golang.org/x/crypto`; notable runtime dependencies include `fsnotify`, `go-fuse`, `pty`, `x/net`, `x/term`, and `x/text`. Check [go.mod](/c:/Users/cui/standalone/symterm/go.mod) before documenting dependency assumptions.
+- The repo now depends on more than `golang.org/x/crypto`; notable runtime dependencies include `fsnotify`, `go-fuse`, `pty`, `x/net`, `x/term`, and `x/text`. Check [go.mod](go.mod) before documenting dependency assumptions.
 - `symtermd` is Linux-oriented and expects FUSE3 for real workspace publication. Use `SYMTERMD_ALLOW_UNSAFE_NO_FUSE=1` only for local development or tests.
-- [internal/daemon/workspace_manager_test.go](/c:/Users/cui/standalone/symterm/internal/daemon/workspace_manager_test.go) is still the largest integration-style test file in the repo and remains the best reference for sync and staged-write behavior.
-- Command execution persists logs under each project's `commands/` directory; see [README.md](/c:/Users/cui/standalone/symterm/README.md) for the current on-disk layout and admin surface details.
-- [design.md](/c:/Users/cui/standalone/symterm/design.md) is the v1 design document in Chinese and remains useful for intent, but the codebase should win when there is any mismatch.
+- [internal/daemon/workspace_manager_test.go](internal/daemon/workspace_manager_test.go) is still the largest integration-style test file in the repo and remains the best reference for sync and staged-write behavior.
+- Command execution persists logs under each project's `commands/` directory; see [README.md](README.md) for the current on-disk layout and admin surface details.
+- [design.md](design.md) is the v1 design document in Chinese and remains useful for intent, but the codebase should win when there is any mismatch.

@@ -113,7 +113,7 @@ func TestProjectCoordinatorEnsureProjectAssignsAuthoritativeSources(t *testing.T
 		hello := registry.Hello("alice", proto.HelloRequest{
 			ProjectID:          "demo",
 			TransportKind:      string(TransportKindSSH),
-			LocalWorkspaceRoot: `C:\Users\cui\standalone\symterm`,
+			LocalWorkspaceRoot: `C:\workspace\symterm`,
 			SessionKind:        proto.SessionKindAuthority,
 			WorkspaceDigest:    testWorkspaceDigest(1, "root-a"),
 		})
@@ -551,7 +551,7 @@ func TestProjectCoordinatorHandleOwnerFileDisconnectMarksSSHWorkspaceRootProject
 	hello := registry.Hello("alice", proto.HelloRequest{
 		ProjectID:          "demo",
 		TransportKind:      string(TransportKindSSH),
-		LocalWorkspaceRoot: `C:\Users\cui\standalone\symterm`,
+		LocalWorkspaceRoot: `C:\workspace\symterm`,
 		SessionKind:        proto.SessionKindAuthority,
 		WorkspaceDigest:    testWorkspaceDigest(1, "root-a"),
 	})
