@@ -108,18 +108,30 @@ Use the tracked installers at [tools/install-symterm.sh](/c:/Users/cui/standalon
 
 Both installers install the client first. After that they ask whether to install `symtermd`. On Linux, choosing yes continues into daemon setup and service installation. On unsupported platforms, the installer warns and skips daemon installation.
 
-If you choose daemon install on Linux, the installer runs an interactive setup wizard by default. If an existing install already has `symtermd.env`, the wizard shows those current values as defaults. Use `./tools/install-symterm.sh --skip-setup-wizard` to reuse the current or pre-exported values without prompting.
-
-If you plan to install the daemon on Linux, `SYMTERMD_REMOTE_ENTRY` must be set before install as a JSON argv array, for example:
+To uninstall on Unix-like hosts, use [tools/uninstall-symterm.sh](/c:/Users/cui/standalone/symterm/tools/uninstall-symterm.sh). By default it removes `symtermd` and then asks whether to also remove the `symterm` client and whether to purge daemon user data:
 
 ```bash
-export SYMTERMD_REMOTE_ENTRY='["/usr/bin/env","bash","-lc"]'
+./tools/uninstall-symterm.sh
 ```
 
-For one-step daemon install on Linux, export it before piping the installer:
+For non-interactive use, pass explicit flags such as `--remove-client`, `--keep-client`, `--purge-data`, or `--keep-data`. `--all --purge-data` removes both binaries and also deletes the daemon projects root such as `~/.symterm`:
 
 ```bash
-export SYMTERMD_REMOTE_ENTRY='["/usr/bin/env","bash","-lc"]'
+./tools/uninstall-symterm.sh --all --purge-data
+```
+
+If you choose daemon install on Linux, the installer runs an interactive setup wizard by default. If an existing install already has `symtermd.env`, the wizard shows those current values as defaults. Use `./tools/install-symterm.sh --skip-setup-wizard` to reuse the current or pre-exported values without prompting.
+
+If you plan to install the daemon on Linux, `SYMTERMD_REMOTE_ENTRY` defaults to `["bash"]`. You can still override it with a JSON argv array, for example:
+
+```bash
+export SYMTERMD_REMOTE_ENTRY='["bash"]'
+```
+
+For one-step daemon install on Linux with an explicit override, export it before piping the installer:
+
+```bash
+export SYMTERMD_REMOTE_ENTRY='["bash"]'
 curl -fsSL https://raw.githubusercontent.com/theTd/symterm/master/tools/install-symterm.sh | bash
 ```
 
@@ -250,7 +262,7 @@ In V1, `symterm` reads this file, but `symtermd` does not.
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `SYMTERMD_PROJECTS_ROOT` | No | Root directory for project state. Defaults to `~/.symterm`. |
-| `SYMTERMD_REMOTE_ENTRY` | Yes | Command prefix used for project commands. Accepts a single argv item or a JSON array. |
+| `SYMTERMD_REMOTE_ENTRY` | No | Command prefix used for project commands. Accepts a single argv item or a JSON array. Defaults to `["bash"]`. |
 | `SYMTERMD_REMOTE_ENTRY_ARGS_JSON` | No | Extra argv items for legacy single-item `SYMTERMD_REMOTE_ENTRY`. |
 | `SYMTERM_TMUX_STATUS_LEFT` | No | Override tmux `status-left`. Default is ` {brand} | {user}@{project} `. Supports `{brand}`, `{user}`, `{project}`, `{role}`. |
 | `SYMTERM_TMUX_STATUS_RIGHT` | No | Override tmux `status-right`. Supports `{status}` and `{clock}`. |

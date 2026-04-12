@@ -12,11 +12,13 @@ const (
 	RemoteEntryArgsJSONEnvKey = "SYMTERMD_REMOTE_ENTRY_ARGS_JSON"
 )
 
+var defaultRemoteEntrypoint = []string{"bash"}
+
 func ParseRemoteEntrypointEnv(env map[string]string) ([]string, error) {
 	entryRaw, ok := env[RemoteEntryEnvKey]
 	entryRaw = strings.TrimSpace(entryRaw)
 	if !ok || entryRaw == "" {
-		return nil, errors.New("missing SYMTERMD_REMOTE_ENTRY")
+		return append([]string(nil), defaultRemoteEntrypoint...), nil
 	}
 	if strings.HasPrefix(entryRaw, "[") {
 		if strings.TrimSpace(env[RemoteEntryArgsJSONEnvKey]) != "" {

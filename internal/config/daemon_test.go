@@ -71,11 +71,12 @@ func TestLoadDaemonConfigAcceptsLegacySplitRemoteEntryEnv(t *testing.T) {
 func TestLoadDaemonConfigAllowsMissingStaticTokens(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := LoadDaemonConfig(map[string]string{
-		"SYMTERMD_REMOTE_ENTRY": "/usr/bin/env",
-	}, "/home/tester")
+	cfg, err := LoadDaemonConfig(map[string]string{}, "/home/tester")
 	if err != nil {
 		t.Fatalf("LoadDaemonConfig() error = %v", err)
+	}
+	if len(cfg.RemoteEntrypoint) != 1 || cfg.RemoteEntrypoint[0] != "bash" {
+		t.Fatalf("RemoteEntrypoint = %#v, want [\"bash\"]", cfg.RemoteEntrypoint)
 	}
 	if len(cfg.StaticTokens) != 0 {
 		t.Fatalf("StaticTokens = %#v, want empty map", cfg.StaticTokens)

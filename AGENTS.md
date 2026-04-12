@@ -105,4 +105,4 @@ Platform coverage in the tree relies heavily on build tags such as `linux`, `win
 - `symtermd` is Linux-oriented and expects FUSE3 for real workspace publication. Use `SYMTERMD_ALLOW_UNSAFE_NO_FUSE=1` only for local development or tests.
 - [internal/daemon/workspace_manager_test.go](internal/daemon/workspace_manager_test.go) is still the largest integration-style test file in the repo and remains the best reference for sync and staged-write behavior.
 - Command execution persists logs under each project's `commands/` directory; see [README.md](README.md) for the current on-disk layout and admin surface details.
-- [design.md](design.md) is the v1 design document in Chinese and remains useful for intent, but the codebase should win when there is any mismatch.
+- When documentation and implementation diverge, treat the codebase as the source of truth.

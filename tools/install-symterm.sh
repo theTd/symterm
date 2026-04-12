@@ -9,7 +9,7 @@ SYMTERM_VERSION="${SYMTERM_VERSION:-${SYMTERMD_VERSION:-}}"
 SYMTERM_DOWNLOAD_URL="${SYMTERM_DOWNLOAD_URL:-}"
 SYMTERMD_DOWNLOAD_URL="${SYMTERMD_DOWNLOAD_URL:-}"
 SYMTERM_INSTALL_DAEMON="${SYMTERM_INSTALL_DAEMON:-auto}"
-SYMTERMD_REMOTE_ENTRY="${SYMTERMD_REMOTE_ENTRY:-__SYMTERMD_REMOTE_ENTRY_JSON__}"
+SYMTERMD_REMOTE_ENTRY="${SYMTERMD_REMOTE_ENTRY:-[\"bash\"]}"
 SYMTERMD_SSH_LISTEN_ADDR="${SYMTERMD_SSH_LISTEN_ADDR:-127.0.0.1:7000}"
 SYMTERMD_ADMIN_WEB_ADDR="${SYMTERMD_ADMIN_WEB_ADDR:-127.0.0.1:6040}"
 SYMTERMD_PROJECTS_ROOT="${SYMTERMD_PROJECTS_ROOT:-$HOME/.symterm}"
@@ -17,6 +17,30 @@ SYMTERMD_ALLOW_UNSAFE_NO_FUSE="${SYMTERMD_ALLOW_UNSAFE_NO_FUSE:-0}"
 SYMTERMD_STATIC_TOKENS="${SYMTERMD_STATIC_TOKENS:-}"
 
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/.local/lib/symterm}"
+SERVICE_NAME="${SERVICE_NAME:-symtermd}"
+LINK_DIR="${LINK_DIR:-}"
+USER_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+SYSTEM_UNIT_PATH="/etc/systemd/system/$SERVICE_NAME.service"
+INITD_PATH="/etc/init.d/$SERVICE_NAME"
+
+expand_path() {
+  case "$1" in
+    "~")
+      printf '%s\n' "$HOME"
+      ;;
+    "~/"*)
+      printf '%s/%s\n' "$HOME" "${1#~/}"
+      ;;
+    *)
+      printf '%s\n' "$1"
+      ;;
+  esac
+}
+
+INSTALL_ROOT="$(expand_path "$INSTALL_ROOT")"
+LINK_DIR="$(expand_path "$LINK_DIR")"
+USER_UNIT_DIR="$(expand_path "$USER_UNIT_DIR")"
+
 BIN_DIR="$INSTALL_ROOT/bin"
 RUN_DIR="$INSTALL_ROOT/run"
 CONFIG_DIR="$INSTALL_ROOT/config"
@@ -24,12 +48,7 @@ ENV_FILE="$CONFIG_DIR/symtermd.env"
 CLIENT_BIN_PATH="$BIN_DIR/symterm"
 DAEMON_BIN_PATH="$BIN_DIR/symtermd"
 LOG_PATH="$RUN_DIR/symtermd.log"
-SERVICE_NAME="${SERVICE_NAME:-symtermd}"
-LINK_DIR="${LINK_DIR:-}"
-USER_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 USER_UNIT_PATH="$USER_UNIT_DIR/$SERVICE_NAME.service"
-SYSTEM_UNIT_PATH="/etc/systemd/system/$SERVICE_NAME.service"
-INITD_PATH="/etc/init.d/$SERVICE_NAME"
 STATE_FILE="$RUN_DIR/install-mode"
 
 SKIP_SETUP_WIZARD=0
@@ -125,26 +144,27 @@ quote_env_value() {
 }
 
 source_basename() {
-  source_url="$1"
-  source_url="${source_url%%\?*}"
-  source_url="${source_url%%\#*}"
-  printf '%s\n' "${source_url##*/}"
+  source_basename_url="$1"
+  source_basename_url="${source_basename_url%%\?*}"
+  source_basename_url="${source_basename_url%%\#*}"
+  printf '%s\n' "${source_basename_url##*/}"
 }
 
 local_source_path() {
-  case "$1" in
+  local_source_input="$1"
+  case "$local_source_input" in
     file://localhost/*)
-      printf '%s\n' "${1#file://localhost}"
+      printf '%s\n' "${local_source_input#file://localhost}"
       ;;
     file:///*)
-      printf '%s\n' "${1#file://}"
+      printf '%s\n' "${local_source_input#file://}"
       ;;
     file://*)
-      echo "unsupported file URI host in download source: $1" >&2
+      echo "unsupported file URI host in download source: $local_source_input" >&2
       exit 1
       ;;
     *)
-      printf '%s\n' "$1"
+      printf '%s\n' "$local_source_input"
       ;;
   esac
 }
@@ -180,20 +200,20 @@ normalize_repo_slug() {
 }
 
 github_api_get() {
-  url="$1"
+  github_api_url="$1"
   if command -v curl >/dev/null 2>&1; then
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-      curl -fsSL -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GITHUB_TOKEN" -H "User-Agent: symterm-install-script" "$url"
+      curl -fsSL -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GITHUB_TOKEN" -H "User-Agent: symterm-install-script" "$github_api_url"
     else
-      curl -fsSL -H "Accept: application/vnd.github+json" -H "User-Agent: symterm-install-script" "$url"
+      curl -fsSL -H "Accept: application/vnd.github+json" -H "User-Agent: symterm-install-script" "$github_api_url"
     fi
     return 0
   fi
   if command -v wget >/dev/null 2>&1; then
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-      wget -qO- --header="Accept: application/vnd.github+json" --header="Authorization: Bearer $GITHUB_TOKEN" --header="User-Agent: symterm-install-script" "$url"
+      wget -qO- --header="Accept: application/vnd.github+json" --header="Authorization: Bearer $GITHUB_TOKEN" --header="User-Agent: symterm-install-script" "$github_api_url"
     else
-      wget -qO- --header="Accept: application/vnd.github+json" --header="User-Agent: symterm-install-script" "$url"
+      wget -qO- --header="Accept: application/vnd.github+json" --header="User-Agent: symterm-install-script" "$github_api_url"
     fi
     return 0
   fi
@@ -202,21 +222,21 @@ github_api_get() {
 }
 
 download_to_file() {
-  source_url="$1"
-  destination="$2"
-  case "$source_url" in
+  download_source_url="$1"
+  download_destination_path="$2"
+  case "$download_source_url" in
     http://*|https://*)
       if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$source_url" -o "$destination"
+        curl -fsSL "$download_source_url" -o "$download_destination_path"
       elif command -v wget >/dev/null 2>&1; then
-        wget -qO "$destination" "$source_url"
+        wget -qO "$download_destination_path" "$download_source_url"
       else
         echo "curl or wget is required to download release assets" >&2
         exit 1
       fi
       ;;
     *)
-      cp "$(local_source_path "$source_url")" "$destination"
+      cp "$(local_source_path "$download_source_url")" "$download_destination_path"
       ;;
   esac
 }
@@ -274,56 +294,64 @@ release_asset_url() {
 }
 
 install_binary_from_source() {
-  source_url="$1"
-  expected_binary="$2"
-  destination="$3"
+  install_source_url="$1"
+  install_expected_binary="$2"
+  install_destination_path="$3"
 
   mkdir -p "$BIN_DIR"
-  tmp_dir="$(mktemp -d)"
-  asset_path="$tmp_dir/asset"
-  download_to_file "$source_url" "$asset_path"
-  case "$(source_basename "$source_url")" in
+  install_tmp_dir="$(mktemp -d)"
+  install_asset_path="$install_tmp_dir/asset"
+  download_to_file "$install_source_url" "$install_asset_path"
+  case "$(source_basename "$install_source_url")" in
     *.tar.gz|*.tgz)
       if ! command -v tar >/dev/null 2>&1; then
         echo "tar is required to extract release assets" >&2
         exit 1
       fi
-      extract_dir="$tmp_dir/extracted"
-      mkdir -p "$extract_dir"
-      tar -xzf "$asset_path" -C "$extract_dir"
-      extracted_path="$(find "$extract_dir" -type f -name "$expected_binary" | head -n 1)"
-      if [ -z "$extracted_path" ]; then
-        echo "release asset did not contain $expected_binary" >&2
+      install_extract_dir="$install_tmp_dir/extracted"
+      mkdir -p "$install_extract_dir"
+      tar -xzf "$install_asset_path" -C "$install_extract_dir"
+      install_extracted_path="$(find "$install_extract_dir" -type f -name "$install_expected_binary" | head -n 1)"
+      if [ -z "$install_extracted_path" ]; then
+        echo "release asset did not contain $install_expected_binary" >&2
         exit 1
       fi
-      cp "$extracted_path" "$destination.tmp"
+      cp "$install_extracted_path" "$install_destination_path.tmp"
       ;;
     *)
-      cp "$asset_path" "$destination.tmp"
+      cp "$install_asset_path" "$install_destination_path.tmp"
       ;;
   esac
-  chmod 0755 "$destination.tmp"
-  mv "$destination.tmp" "$destination"
-  rm -rf "$tmp_dir"
+  chmod 0755 "$install_destination_path.tmp"
+  mv "$install_destination_path.tmp" "$install_destination_path"
+  rm -rf "$install_tmp_dir"
 }
 
 resolve_link_path() {
-  link_name="$1"
+  resolve_link_name="$1"
   if [ -n "$LINK_DIR" ]; then
-    printf '%s/%s\n' "$LINK_DIR" "$link_name"
+    printf '%s/%s\n' "$LINK_DIR" "$resolve_link_name"
   elif [ "$(id -u)" -eq 0 ]; then
-    printf '%s\n' "/usr/local/bin/$link_name"
+    printf '%s\n' "/usr/local/bin/$resolve_link_name"
   else
-    printf '%s\n' "$HOME/.local/bin/$link_name"
+    printf '%s\n' "$HOME/.local/bin/$resolve_link_name"
   fi
 }
 
 link_command() {
-  target_path="$1"
+  link_target_path="$1"
   link_name="$2"
   link_path="$(resolve_link_path "$link_name")"
+  if [ ! -f "$link_target_path" ]; then
+    echo "refusing to create command link for missing target: $link_target_path" >&2
+    exit 1
+  fi
   mkdir -p "$(dirname "$link_path")"
-  ln -sfn "$target_path" "$link_path"
+  ln -sfn "$link_target_path" "$link_path"
+  if [ ! -e "$link_path" ]; then
+    echo "created command link is broken: $link_path -> $link_target_path" >&2
+    exit 1
+  fi
   printf '%s\n' "$link_path"
 }
 
@@ -414,7 +442,7 @@ prompt_remote_entry_json() {
         return 0
         ;;
       *)
-        echo "Enter a JSON argv array, for example: [\"/usr/bin/env\",\"bash\",\"-lc\"]" >&2
+        echo "Enter a JSON argv array, for example: [\"bash\"]" >&2
         ;;
     esac
   done
@@ -678,7 +706,7 @@ validate_remote_entry() {
       ;;
     *)
       echo "SYMTERMD_REMOTE_ENTRY should be a JSON argv array, for example:" >&2
-      echo "  export SYMTERMD_REMOTE_ENTRY='[\"/usr/bin/env\",\"bash\",\"-lc\"]'" >&2
+      echo "  export SYMTERMD_REMOTE_ENTRY='[\"bash\"]'" >&2
       exit 1
       ;;
   esac
