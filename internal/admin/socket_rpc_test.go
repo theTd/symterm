@@ -2,7 +2,6 @@ package admin
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,7 +13,7 @@ func TestSocketServerServesDaemonInfo(t *testing.T) {
 	t.Parallel()
 
 	service := newTestAdminService(t)
-	socketPath := filepath.Join(t.TempDir(), "admin.sock")
+	socketPath := newAdminSocketTestPath(t)
 	listener, err := ListenAdminSocket(socketPath)
 	if err != nil {
 		t.Fatalf("ListenAdminSocket() error = %v", err)
@@ -57,7 +56,7 @@ func TestSocketServerServesTmuxStatus(t *testing.T) {
 			StdioBytesOut:    20,
 		}, nil
 	}))
-	socketPath := filepath.Join(t.TempDir(), "admin.sock")
+	socketPath := newAdminSocketTestPath(t)
 	listener, err := ListenAdminSocket(socketPath)
 	if err != nil {
 		t.Fatalf("ListenAdminSocket() error = %v", err)

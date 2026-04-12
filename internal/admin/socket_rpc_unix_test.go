@@ -17,7 +17,7 @@ func TestListenAdminSocketPermissionDenied(t *testing.T) {
 		t.Skip("permission checks are unreliable as root")
 	}
 
-	root := t.TempDir()
+	root := newAdminSocketTestDir(t)
 	socketDir := filepath.Join(root, "private")
 	if err := os.MkdirAll(socketDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
