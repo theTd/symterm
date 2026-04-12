@@ -42,7 +42,7 @@ Run the test suite with:
 go test ./...
 ```
 
-The repository also includes GitHub Actions CI in `.github/workflows/ci.yml`. On every push and pull request it runs:
+The repository also includes GitHub Actions CI in `.github/workflows/ci.yml`. On every push and pull request it builds the embedded admin web first, then runs:
 
 - Node LTS setup for the embedded admin web
 - `npm ci` in `web/admin`
@@ -84,6 +84,8 @@ npm run build
 ```
 
 The Vite build writes the embedded assets into `internal/admin/webdist/`, and `symtermd` serves them from the final single binary via `go:embed`.
+
+`internal/admin/webdist/` is a generated directory. The repository keeps only a placeholder file there so `go:embed` still has a matching path in a clean checkout; built assets in that directory are ignored by git.
 
 ## Quick start
 

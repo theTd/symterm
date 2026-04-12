@@ -33,6 +33,8 @@ GoReleaser runs the following `before` hooks before any binary build:
 
 That keeps the embedded `/admin` assets aligned with the shipped daemon binary.
 
+The hook order matters: the admin web build must run before Go commands that compile packages using `//go:embed all:webdist`.
+
 If the repository does not yet have a git remote, prefer this command over
 `goreleaser check`. GoReleaser validates SCM release metadata during `check`,
 so a repo without `origin` will fail that step even though snapshot builds work.

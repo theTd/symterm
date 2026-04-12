@@ -8,9 +8,9 @@ dist: dist
 
 before:
   hooks:
-    - go test ./...
     - npm --prefix web/admin ci
     - npm --prefix web/admin run build
+    - go test ./...
 
 builds:
   - id: symterm

@@ -1,4 +1,6 @@
 dist/
+internal/admin/webdist/*
+!internal/admin/webdist/.gitkeep
 web/admin/node_modules/
 web/admin/coverage/
 web/admin/.vite/

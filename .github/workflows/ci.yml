@@ -89,12 +89,6 @@ jobs:
             exit 1
           fi
 
-      - name: Run go vet
-        run: go vet ./...
-
-      - name: Run tests
-        run: go test ./...
-
       - name: Install admin web dependencies
         working-directory: web/admin
         run: npm ci
@@ -110,6 +104,12 @@ jobs:
       - name: Build admin web
         working-directory: web/admin
         run: npm run build
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test ./...
 
       - name: Prepare artifact directory
         shell: bash
