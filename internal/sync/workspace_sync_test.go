@@ -123,6 +123,7 @@ func TestScanLocalWorkspaceRejectsPortableNameCollisions(t *testing.T) {
 		}
 		t.Fatalf("WriteFile(second) error = %v", err)
 	}
+	skipIfHostMergedPathVariants(t, firstPath, secondPath)
 
 	_, err := ScanLocalWorkspace(root, nil, true)
 	if err == nil {
@@ -161,6 +162,7 @@ func TestScanLocalWorkspaceRejectsDirectoryNameCollisions(t *testing.T) {
 		}
 		t.Fatalf("WriteFile(second) error = %v", err)
 	}
+	skipIfHostMergedPathVariants(t, filepath.Dir(firstPath), filepath.Dir(secondPath))
 
 	_, err := ScanLocalWorkspace(root, nil, true)
 	if err == nil {
@@ -197,5 +199,21 @@ func TestScanLocalWorkspaceRejectsWindowsReservedName(t *testing.T) {
 	}
 	if !strings.Contains(protoErr.Message, "Windows-reserved") {
 		t.Fatalf("scanLocalWorkspace() message = %q", protoErr.Message)
+	}
+}
+
+func skipIfHostMergedPathVariants(t *testing.T, firstPath, secondPath string) {
+	t.Helper()
+
+	firstInfo, err := os.Stat(firstPath)
+	if err != nil {
+		t.Fatalf("Stat(%q) error = %v", firstPath, err)
+	}
+	secondInfo, err := os.Stat(secondPath)
+	if err != nil {
+		t.Fatalf("Stat(%q) error = %v", secondPath, err)
+	}
+	if os.SameFile(firstInfo, secondInfo) {
+		t.Skipf("host filesystem merged normalized path variants: %q and %q resolve to the same entry", firstPath, secondPath)
 	}
 }
