@@ -11,8 +11,6 @@ import (
 )
 
 func TestSyncGuardHashPathsReusesLocalHashCache(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "note.txt"), []byte("payload"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
