@@ -124,9 +124,6 @@ func (c ClientConnectionConfig) EndpointRaw() (string, error) {
 }
 
 func validateSetupConfig(cfg SetupConfig, strict bool) error {
-	if cfg.Metadata.Version == 0 {
-		cfg.Metadata.Version = setupConfigVersion
-	}
 	if cfg.Metadata.Version != setupConfigVersion {
 		return fmt.Errorf("unsupported config version %d", cfg.Metadata.Version)
 	}

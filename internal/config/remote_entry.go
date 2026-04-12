@@ -17,29 +17,19 @@ var defaultRemoteEntrypoint = []string{"bash"}
 func ParseRemoteEntrypointEnv(env map[string]string) ([]string, error) {
 	entryRaw, ok := env[RemoteEntryEnvKey]
 	entryRaw = strings.TrimSpace(entryRaw)
+	if strings.TrimSpace(env[RemoteEntryArgsJSONEnvKey]) != "" {
+		return nil, errors.New("SYMTERMD_REMOTE_ENTRY_ARGS_JSON is no longer supported; use SYMTERMD_REMOTE_ENTRY as a JSON array")
+	}
 	if !ok || entryRaw == "" {
 		return append([]string(nil), defaultRemoteEntrypoint...), nil
 	}
 	if strings.HasPrefix(entryRaw, "[") {
-		if strings.TrimSpace(env[RemoteEntryArgsJSONEnvKey]) != "" {
-			return nil, errors.New("SYMTERMD_REMOTE_ENTRY JSON array cannot be combined with SYMTERMD_REMOTE_ENTRY_ARGS_JSON")
-		}
 		return parseStructuredArgv(entryRaw, "SYMTERMD_REMOTE_ENTRY")
 	}
 	if strings.ContainsAny(entryRaw, "\r\n\t ") {
-		return nil, errors.New("legacy SYMTERMD_REMOTE_ENTRY must contain exactly one argv item; use a JSON array for paths with spaces or additional args")
+		return nil, errors.New("SYMTERMD_REMOTE_ENTRY must be a JSON array when specifying multiple argv items or paths with spaces")
 	}
-
-	argsRaw := strings.TrimSpace(env[RemoteEntryArgsJSONEnvKey])
-	if argsRaw == "" {
-		return []string{entryRaw}, nil
-	}
-
-	entryArgs, err := parseStructuredArgv(argsRaw, "SYMTERMD_REMOTE_ENTRY_ARGS_JSON")
-	if err != nil {
-		return nil, err
-	}
-	return append([]string{entryRaw}, entryArgs...), nil
+	return []string{entryRaw}, nil
 }
 
 func parseStructuredArgv(raw string, label string) ([]string, error) {

@@ -25,9 +25,6 @@ func NewDaemonContainer(ctx context.Context, cfg config.DaemonConfig) (*DaemonCo
 	if err != nil {
 		return nil, err
 	}
-	if err := adminStore.ImportBootstrapTokens(cfg.StaticTokens, timeNowUTC()); err != nil {
-		return nil, err
-	}
 	eventHub, err := admin.NewEventHub(0)
 	if err != nil {
 		return nil, err

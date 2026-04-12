@@ -1,8 +1,10 @@
 package admin
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -16,59 +18,26 @@ import (
 	"symterm/internal/control"
 )
 
-func TestHTTPServerRequiresLoginAndSupportsSnapshot(t *testing.T) {
+func TestHTTPServerRejectsLegacyAdminRoutes(t *testing.T) {
 	t.Parallel()
 
-	server, service := newTestHTTPServer(t)
+	server, _ := newTestHTTPServer(t)
 	defer server.Close()
 
-	res, err := http.Get(server.URL + "/admin/api/snapshot")
-	if err != nil {
-		t.Fatalf("GET snapshot error = %v", err)
-	}
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("GET snapshot status = %d, want 401", res.StatusCode)
-	}
-
-	sessionCookie, csrfCookie := adminLogin(t, server.URL)
-
 	client := &http.Client{}
-	createReq, _ := http.NewRequest(http.MethodPost, server.URL+"/admin/api/users", strings.NewReader(`{"username":"bob"}`))
-	createReq.Header.Set("Content-Type", "application/json")
-	createReq.Header.Set("X-CSRF-Token", csrfCookie.Value)
-	createReq.AddCookie(sessionCookie)
-	createReq.AddCookie(csrfCookie)
-	createRes, err := client.Do(createReq)
-	if err != nil {
-		t.Fatalf("POST users error = %v", err)
-	}
-	if createRes.StatusCode != http.StatusOK {
-		t.Fatalf("POST users status = %d", createRes.StatusCode)
-	}
-
-	snapshotReq, _ := http.NewRequest(http.MethodGet, server.URL+"/admin/api/snapshot", nil)
-	snapshotReq.AddCookie(sessionCookie)
-	snapshotReq.AddCookie(csrfCookie)
-	snapshotRes, err := client.Do(snapshotReq)
-	if err != nil {
-		t.Fatalf("GET snapshot(authenticated) error = %v", err)
-	}
-	if snapshotRes.StatusCode != http.StatusOK {
-		t.Fatalf("GET snapshot(authenticated) status = %d", snapshotRes.StatusCode)
-	}
-	var snapshot Snapshot
-	if err := json.NewDecoder(snapshotRes.Body).Decode(&snapshot); err != nil {
-		t.Fatalf("Decode(snapshot) error = %v", err)
-	}
-	if len(snapshot.Users) != 1 || snapshot.Users[0].Username != "bob" {
-		t.Fatalf("snapshot users = %#v", snapshot.Users)
-	}
-	if snapshot.Daemon.Version != service.DaemonInfo().Version {
-		t.Fatalf("snapshot daemon = %#v", snapshot.Daemon)
+	for _, path := range []string{"/admin/legacy", "/admin/api/snapshot", "/admin/api/users"} {
+		req, _ := http.NewRequest(http.MethodGet, server.URL+path, nil)
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s error = %v", path, err)
+		}
+		if res.StatusCode != http.StatusNotFound {
+			t.Fatalf("GET %s status = %d, want 404", path, res.StatusCode)
+		}
 	}
 }
 
-func TestHTTPServerWebSocketRequiresLogin(t *testing.T) {
+func TestHTTPServerWebSocketOpensWithoutLogin(t *testing.T) {
 	t.Parallel()
 
 	server, _ := newTestHTTPServer(t)
@@ -78,13 +47,12 @@ func TestHTTPServerWebSocketRequiresLogin(t *testing.T) {
 	defer conn.Close()
 
 	var payload struct {
-		Type    string `json:"type"`
-		Message string `json:"message"`
+		Type string `json:"type"`
 	}
 	if err := websocket.JSON.Receive(conn, &payload); err != nil {
 		t.Fatalf("websocket receive error = %v", err)
 	}
-	if payload.Type != "auth_error" || payload.Message != "not logged in" {
+	if payload.Type != "hello" {
 		t.Fatalf("payload = %#v", payload)
 	}
 }
@@ -95,13 +63,22 @@ func TestHTTPServerWebSocketSignalsCursorExpiryThenSnapshot(t *testing.T) {
 	server, service := newTestHTTPServer(t)
 	defer server.Close()
 
-	sessionCookie, csrfCookie := adminLogin(t, server.URL)
 	for idx := 0; idx < 300; idx++ {
 		service.SetListenAddr(fmt.Sprintf("127.0.0.1:%d", 7000+idx))
 	}
 
-	conn := dialAdminWS(t, server.URL, 1, sessionCookie, csrfCookie)
+	conn := dialAdminWS(t, server.URL, 1)
 	defer conn.Close()
+
+	var hello struct {
+		Type string `json:"type"`
+	}
+	if err := websocket.JSON.Receive(conn, &hello); err != nil {
+		t.Fatalf("websocket receive(hello) error = %v", err)
+	}
+	if hello.Type != "hello" {
+		t.Fatalf("hello payload = %#v", hello)
+	}
 
 	var expired struct {
 		Type string `json:"type"`
@@ -120,8 +97,7 @@ func TestHTTPServerWebSocketStreamsSnapshotUpdatesAndReconnects(t *testing.T) {
 	server, service := newTestHTTPServer(t)
 	defer server.Close()
 
-	sessionCookie, csrfCookie := adminLogin(t, server.URL)
-	conn := dialAdminWS(t, server.URL, 0, sessionCookie, csrfCookie)
+	conn := dialAdminWS(t, server.URL, 0)
 	initial := service.Snapshot()
 
 	service.SetListenAddr("127.0.0.1:7100")
@@ -135,7 +111,7 @@ func TestHTTPServerWebSocketStreamsSnapshotUpdatesAndReconnects(t *testing.T) {
 	lastCursor := updated.Event.Cursor
 	_ = conn.Close()
 
-	reconnected := dialAdminWS(t, server.URL, lastCursor, sessionCookie, csrfCookie)
+	reconnected := dialAdminWS(t, server.URL, lastCursor)
 	defer reconnected.Close()
 
 	if _, err := service.CreateUser("loopback-admin:127.0.0.1", "carol", ""); err != nil {
@@ -147,6 +123,148 @@ func TestHTTPServerWebSocketStreamsSnapshotUpdatesAndReconnects(t *testing.T) {
 	if next.Event.Cursor <= initial.Cursor {
 		t.Fatalf("user event cursor = %d, want > %d", next.Event.Cursor, initial.Cursor)
 	}
+}
+
+func TestHTTPServerServesEmbeddedSPAAndBootstrapV1(t *testing.T) {
+	t.Parallel()
+
+	server, _ := newTestHTTPServer(t)
+	defer server.Close()
+
+	res, err := http.Get(server.URL + "/admin")
+	if err != nil {
+		t.Fatalf("GET /admin error = %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET /admin status = %d", res.StatusCode)
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(/admin) error = %v", err)
+	}
+	if !bytes.Contains(body, []byte(`<div id="root"></div>`)) {
+		t.Fatalf("/admin body = %q", string(body))
+	}
+
+	bootstrapRes, err := http.Get(server.URL + "/admin/api/v1/bootstrap")
+	if err != nil {
+		t.Fatalf("GET bootstrap v1 error = %v", err)
+	}
+	var bootstrap struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Actor   string `json:"actor"`
+			APIBase string `json:"api_base"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(bootstrapRes.Body).Decode(&bootstrap); err != nil {
+		t.Fatalf("Decode(bootstrap) error = %v", err)
+	}
+	if !bootstrap.OK || bootstrap.Data.Actor == "" {
+		t.Fatalf("bootstrap payload = %#v", bootstrap)
+	}
+	if bootstrap.Data.APIBase != "/admin/api/v1" {
+		t.Fatalf("bootstrap api_base = %q", bootstrap.Data.APIBase)
+	}
+}
+
+func TestHTTPServerV1UserLifecycleAndAuditFilters(t *testing.T) {
+	t.Parallel()
+
+	server, _ := newTestHTTPServer(t)
+	defer server.Close()
+
+	client := &http.Client{}
+
+	createReq, _ := http.NewRequest(http.MethodPost, server.URL+"/admin/api/v1/users", strings.NewReader(`{"username":"dora","note":"ops"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRes, err := client.Do(createReq)
+	if err != nil {
+		t.Fatalf("POST v1 users error = %v", err)
+	}
+	if createRes.StatusCode != http.StatusOK {
+		t.Fatalf("POST v1 users status = %d", createRes.StatusCode)
+	}
+
+	tokenReq, _ := http.NewRequest(http.MethodPost, server.URL+"/admin/api/v1/users/dora/tokens", strings.NewReader(`{"description":"cli"}`))
+	tokenReq.Header.Set("Content-Type", "application/json")
+	tokenRes, err := client.Do(tokenReq)
+	if err != nil {
+		t.Fatalf("POST v1 token error = %v", err)
+	}
+	if tokenRes.StatusCode != http.StatusOK {
+		t.Fatalf("POST v1 token status = %d", tokenRes.StatusCode)
+	}
+
+	auditReq, _ := http.NewRequest(http.MethodGet, server.URL+"/admin/api/v1/audit?action=create_user&target=dora&page=1&page_size=10", nil)
+	auditRes, err := client.Do(auditReq)
+	if err != nil {
+		t.Fatalf("GET v1 audit error = %v", err)
+	}
+	if auditRes.StatusCode != http.StatusOK {
+		t.Fatalf("GET v1 audit status = %d", auditRes.StatusCode)
+	}
+	var audit struct {
+		OK   bool          `json:"ok"`
+		Data []AuditRecord `json:"data"`
+		Meta struct {
+			Total int `json:"total"`
+		} `json:"meta"`
+	}
+	if err := json.NewDecoder(auditRes.Body).Decode(&audit); err != nil {
+		t.Fatalf("Decode(v1 audit) error = %v", err)
+	}
+	if !audit.OK || audit.Meta.Total == 0 {
+		t.Fatalf("audit payload = %#v", audit)
+	}
+	if audit.Data[0].Action != "create_user" || audit.Data[0].Target != "dora" {
+		t.Fatalf("audit data = %#v", audit.Data)
+	}
+}
+
+func TestHTTPServerV1EncodesEmptyCollectionsAsArrays(t *testing.T) {
+	t.Parallel()
+
+	server, service := newTestHTTPServer(t)
+	defer server.Close()
+
+	if _, err := service.store.CreateUser("empty", "", time.Unix(1_700_000_200, 0).UTC()); err != nil {
+		t.Fatalf("CreateUser(empty) error = %v", err)
+	}
+
+	client := &http.Client{}
+
+	assertBodyContains := func(path string, snippets ...string) {
+		t.Helper()
+
+		req, _ := http.NewRequest(http.MethodGet, server.URL+path, nil)
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s error = %v", path, err)
+		}
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s status = %d", path, res.StatusCode)
+		}
+		body, err := io.ReadAll(res.Body)
+		if err != nil {
+			t.Fatalf("ReadAll(%s) error = %v", path, err)
+		}
+		text := string(body)
+		for _, snippet := range snippets {
+			if !strings.Contains(text, snippet) {
+				t.Fatalf("GET %s body missing %q: %s", path, snippet, text)
+			}
+		}
+	}
+
+	assertBodyContains("/admin/api/v1/overview", `"recent_audit":[]`)
+	assertBodyContains("/admin/api/v1/sessions", `"items":[]`)
+	assertBodyContains("/admin/api/v1/users", `"token_ids":[]`)
+	assertBodyContains(
+		"/admin/api/v1/users/empty",
+		`"tokens":[]`,
+		`"related_audit":[]`,
+	)
 }
 
 func newTestHTTPServer(t *testing.T) (*httptest.Server, *Service) {
@@ -176,33 +294,7 @@ func newTestHTTPServer(t *testing.T) (*httptest.Server, *Service) {
 	return httptest.NewServer(NewHTTPServer(service).routes()), service
 }
 
-func adminLogin(t *testing.T, baseURL string) (*http.Cookie, *http.Cookie) {
-	t.Helper()
-
-	loginReq, _ := http.NewRequest(http.MethodPost, baseURL+"/admin/api/login", nil)
-	loginRes, err := http.DefaultClient.Do(loginReq)
-	if err != nil {
-		t.Fatalf("POST login error = %v", err)
-	}
-	if loginRes.StatusCode != http.StatusOK {
-		t.Fatalf("POST login status = %d", loginRes.StatusCode)
-	}
-	var sessionCookie, csrfCookie *http.Cookie
-	for _, cookie := range loginRes.Cookies() {
-		switch cookie.Name {
-		case adminSessionCookie:
-			sessionCookie = cookie
-		case adminCSRFCookie:
-			csrfCookie = cookie
-		}
-	}
-	if sessionCookie == nil || csrfCookie == nil {
-		t.Fatalf("login cookies = %#v", loginRes.Cookies())
-	}
-	return sessionCookie, csrfCookie
-}
-
-func dialAdminWS(t *testing.T, baseURL string, cursor uint64, cookies ...*http.Cookie) *websocket.Conn {
+func dialAdminWS(t *testing.T, baseURL string, cursor uint64) *websocket.Conn {
 	t.Helper()
 
 	parsed, err := url.Parse(baseURL)
@@ -216,12 +308,6 @@ func dialAdminWS(t *testing.T, baseURL string, cursor uint64, cookies ...*http.C
 	config, err := websocket.NewConfig(wsURL, baseURL+"/admin")
 	if err != nil {
 		t.Fatalf("websocket.NewConfig() error = %v", err)
-	}
-	config.Header = http.Header{}
-	for _, cookie := range cookies {
-		if cookie != nil {
-			config.Header.Add("Cookie", cookie.String())
-		}
 	}
 	conn, err := websocket.DialConfig(config)
 	if err != nil {

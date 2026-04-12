@@ -44,6 +44,11 @@ go test ./...
 
 The repository also includes GitHub Actions CI in `.github/workflows/ci.yml`. On every push and pull request it runs:
 
+- Node LTS setup for the embedded admin web
+- `npm ci` in `web/admin`
+- `npm run lint` in `web/admin`
+- `npm run test` in `web/admin`
+- `npm run build` in `web/admin`
 - `gofmt` verification
 - `go vet ./...`
 - `go test ./...`
@@ -69,6 +74,16 @@ Builds inject the resolved version into both binaries. You can inspect it with:
 ./symterm version
 ./symtermd --version
 ```
+
+If you change the embedded admin SPA, rebuild it before local daemon builds:
+
+```bash
+cd web/admin
+npm ci
+npm run build
+```
+
+The Vite build writes the embedded assets into `internal/admin/webdist/`, and `symtermd` serves them from the final single binary via `go:embed`.
 
 ## Quick start
 
@@ -272,10 +287,8 @@ In V1, `symterm` reads this file, but `symtermd` does not.
 | --- | --- | --- |
 | `SYMTERMD_PROJECTS_ROOT` | No | Root directory for project state. Defaults to `~/.symterm`. |
 | `SYMTERMD_REMOTE_ENTRY` | No | Command prefix used for project commands. Accepts a single argv item or a JSON array. Defaults to `["bash"]`. |
-| `SYMTERMD_REMOTE_ENTRY_ARGS_JSON` | No | Extra argv items for legacy single-item `SYMTERMD_REMOTE_ENTRY`. |
 | `SYMTERM_TMUX_STATUS_LEFT` | No | Override tmux `status-left`. Default is ` {brand} | {user}@{project} `. Supports `{brand}`, `{user}`, `{project}`, `{role}`. |
 | `SYMTERM_TMUX_STATUS_RIGHT` | No | Override tmux `status-right`. Supports `{status}` and `{clock}`. |
-| `SYMTERMD_STATIC_TOKENS` | No | Comma-separated static credentials in `token=username` form. Prefer issuing per-user managed tokens through `symterm admin users token issue`. |
 | `SYMTERMD_SSH_LISTEN_ADDR` | No | SSH listen address for the embedded business endpoint. Defaults to `127.0.0.1:7000`. |
 | `SYMTERMD_ADMIN_WEB_ADDR` | No | Admin HTTP listen address. Defaults to `127.0.0.1:6040`. |
 | `SYMTERMD_ALLOW_UNSAFE_NO_FUSE` | No | Enables passthrough workspace mode without FUSE. Intended for local testing. |
@@ -287,7 +300,7 @@ The daemon starts two admin interfaces:
 - Unix socket at `<projects-root>/admin.sock`
 - HTTP admin server at `SYMTERMD_ADMIN_WEB_ADDR`
 
-The web UI is served at `/admin`. Login is loopback-only and session-cookie based.
+The web UI is served at `/admin`. Loopback requests access the SPA, which talks to versioned admin APIs under `/admin/api/v1/*` and receives realtime updates over `/admin/ws`.
 
 The CLI admin entrypoint is:
 
@@ -312,6 +325,33 @@ symterm admin users entrypoint set <username> -- <argv>
 ```
 
 If needed, point the admin client at a non-default socket with `SYMTERM_ADMIN_SOCKET`.
+
+## Admin web development
+
+The admin console lives in `web/admin/` and uses `React`, `TypeScript`, `Vite`, `React Router`, `TanStack Query`, `Vitest`, and `ESLint`.
+
+For local frontend development against a daemon on `127.0.0.1:6040`:
+
+```bash
+cd web/admin
+npm ci
+npm run dev
+```
+
+To target a different daemon while running the Vite dev server:
+
+```bash
+cd web/admin
+VITE_ADMIN_TARGET=http://127.0.0.1:6041 npm run dev
+```
+
+The development proxy forwards `/admin/api/*` and `/admin/ws` to the daemon, so the browser still uses the same route structure as the embedded build.
+
+Useful frontend commands:
+
+- `npm run lint`
+- `npm run test`
+- `npm run build`
 
 ## On-disk layout
 
@@ -361,5 +401,7 @@ Or use the repo scripts:
 ```bash
 ./tools/goreleaser_build_snapshot.sh
 ```
+
+Snapshot artifacts are written under `dist/`.
 
 See [RELEASING.md](RELEASING.md) for the exact release workflow.

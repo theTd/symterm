@@ -10,15 +10,11 @@ import (
 )
 
 type HTTPServer struct {
-	service  *Service
-	sessions *adminSessionStore
+	service *Service
 }
 
 func NewHTTPServer(service *Service) *HTTPServer {
-	return &HTTPServer{
-		service:  service,
-		sessions: newAdminSessionStore(),
-	}
+	return &HTTPServer{service: service}
 }
 
 func (s *HTTPServer) ServeListener(ctx context.Context, listener net.Listener) error {
@@ -37,15 +33,16 @@ func (s *HTTPServer) ServeListener(ctx context.Context, listener net.Listener) e
 
 func (s *HTTPServer) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/admin", s.handleAdminShell)
-	mux.HandleFunc("/admin/api/login", s.handleLogin)
-	mux.HandleFunc("/admin/api/logout", s.withAuth(s.requireCSRF(s.handleLogout)))
-	mux.HandleFunc("/admin/api/snapshot", s.withAuth(s.handleSnapshot))
-	mux.HandleFunc("/admin/api/daemon", s.withAuth(s.handleDaemon))
-	mux.HandleFunc("/admin/api/sessions", s.withAuth(s.requireCSRF(s.handleSessions)))
-	mux.HandleFunc("/admin/api/sessions/", s.withAuth(s.requireCSRF(s.handleSession)))
-	mux.HandleFunc("/admin/api/users", s.withAuth(s.requireCSRF(s.handleUsers)))
-	mux.HandleFunc("/admin/api/users/", s.withAuth(s.requireCSRF(s.handleUser)))
+	mux.HandleFunc("/admin", s.handleAdminRoot)
+	mux.HandleFunc("/admin/", s.handleAdminRoot)
+	mux.HandleFunc("/admin/api/v1/bootstrap", s.withLoopbackAPI(s.handleV1Bootstrap))
+	mux.HandleFunc("/admin/api/v1/overview", s.withLoopbackAPI(s.handleV1Overview))
+	mux.HandleFunc("/admin/api/v1/sessions", s.withLoopbackAPI(s.handleV1Sessions))
+	mux.HandleFunc("/admin/api/v1/sessions/", s.withLoopbackAPI(s.handleV1Session))
+	mux.HandleFunc("/admin/api/v1/users", s.withLoopbackAPI(s.handleV1Users))
+	mux.HandleFunc("/admin/api/v1/users/", s.withLoopbackAPI(s.handleV1User))
+	mux.HandleFunc("/admin/api/v1/tokens/", s.withLoopbackAPI(s.handleV1Token))
+	mux.HandleFunc("/admin/api/v1/audit", s.withLoopbackAPI(s.handleV1Audit))
 	mux.Handle("/admin/ws", websocket.Handler(s.handleEventsWebsocket))
 	return mux
 }

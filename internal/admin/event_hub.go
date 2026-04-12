@@ -16,6 +16,7 @@ const (
 	EventKindUserUpsert    = "user_upsert"
 	EventKindTokenIssued   = "token_issued"
 	EventKindTokenRevoked  = "token_revoked"
+	EventKindAuditAppended = "audit_appended"
 )
 
 type Event struct {
@@ -26,6 +27,7 @@ type Event struct {
 	SessionID string           `json:"session_id,omitempty"`
 	User      *UserRecord      `json:"user,omitempty"`
 	Token     *UserTokenRecord `json:"token,omitempty"`
+	Audit     *AuditRecord     `json:"audit,omitempty"`
 }
 
 type EventHub struct {
@@ -89,7 +91,7 @@ func (h *EventHub) Unsubscribe(subscriberID uint64) {
 	h.events.Unsubscribe(subscriberID)
 }
 
-func (h *EventHub) ListSessions() []SessionSnapshot {
+func (h *EventHub) ListSessions(includeClosed bool) []SessionSnapshot {
 	if h == nil {
 		return nil
 	}
@@ -106,6 +108,17 @@ func (h *EventHub) ListSessions() []SessionSnapshot {
 		}
 		return sessions[i].ConnectedAt.Before(sessions[j].ConnectedAt)
 	})
+	if includeClosed {
+		for _, snapshot := range h.closed {
+			sessions = append(sessions, cloneSessionSnapshot(snapshot))
+		}
+		sort.Slice(sessions, func(i, j int) bool {
+			if sessions[i].ConnectedAt.Equal(sessions[j].ConnectedAt) {
+				return sessions[i].SessionID < sessions[j].SessionID
+			}
+			return sessions[i].ConnectedAt.Before(sessions[j].ConnectedAt)
+		})
+	}
 	return sessions
 }
 
@@ -153,6 +166,17 @@ func (h *EventHub) RecordToken(kind string, record UserTokenRecord) {
 	h.events.Append(Event{
 		Kind:  kind,
 		Token: &copy,
+	})
+}
+
+func (h *EventHub) RecordAudit(record AuditRecord) {
+	if h == nil {
+		return
+	}
+	copy := record
+	h.events.Append(Event{
+		Kind:  EventKindAuditAppended,
+		Audit: &copy,
 	})
 }
 
@@ -207,6 +231,10 @@ func cloneEvent(event Event) Event {
 	if event.Token != nil {
 		copy := cloneTokenRecord(*event.Token)
 		event.Token = &copy
+	}
+	if event.Audit != nil {
+		copy := *event.Audit
+		event.Audit = &copy
 	}
 	return event
 }

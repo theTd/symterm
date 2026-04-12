@@ -240,7 +240,7 @@ func TestRunSSHListenerDisconnectsSessionWithPendingWatchStream(t *testing.T) {
 	}
 }
 
-func TestRunSSHListenerImportedBootstrapConnectionsCanUseHello(t *testing.T) {
+func TestRunSSHListenerManagedStoreTokensCanUseHello(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -250,8 +250,12 @@ func TestRunSSHListenerImportedBootstrapConnectionsCanUseHello(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStore() error = %v", err)
 	}
-	if err := store.ImportBootstrapTokens(map[string]string{"bootstrap-secret": "alice"}, time.Now().UTC()); err != nil {
-		t.Fatalf("ImportBootstrapTokens() error = %v", err)
+	if _, err := store.CreateUser("alice", "", time.Now().UTC()); err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+	issued, err := store.IssueToken("alice", "ssh", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("IssueToken() error = %v", err)
 	}
 	service := controltest.NewService(t, store, control.ServiceDependencies{})
 	signer, err := LoadOrCreateSSHHostSigner(filepath.Join(t.TempDir(), "ssh_host_ed25519"))
@@ -268,7 +272,7 @@ func TestRunSSHListenerImportedBootstrapConnectionsCanUseHello(t *testing.T) {
 		_ = RunSSHListener(ctx, service, store, listener, signer)
 	}()
 
-	client, err := dialSSH(listener.Addr().String(), signer, "bootstrap-secret")
+	client, err := dialSSH(listener.Addr().String(), signer, issued.PlainSecret)
 	if err != nil {
 		t.Fatalf("dialSSH() error = %v", err)
 	}

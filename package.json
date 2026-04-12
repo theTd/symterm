@@ -1,0 +1,12 @@
+{
+  "name": "symterm",
+  "version": "1.0.0",
+  "description": "`symterm` is a Go client/daemon pair for running commands against a shared project workspace.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

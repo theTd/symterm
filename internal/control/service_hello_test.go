@@ -34,7 +34,7 @@ func TestHelloAuthenticatedCreatesSessionWithoutSecondTokenCheck(t *testing.T) {
 	response, err := service.HelloAuthenticated(context.Background(), AuthenticatedPrincipal{
 		Username:    "alice",
 		TokenID:     "tok-1",
-		TokenSource: TokenSourceBootstrap,
+		TokenSource: TokenSourceManaged,
 	}, proto.HelloRequest{
 		ProjectID:     "demo",
 		TransportKind: string(TransportKindSSH),
@@ -58,7 +58,7 @@ func TestHelloAuthenticatedRejectsUnknownSessionKind(t *testing.T) {
 	_, err = service.HelloAuthenticated(context.Background(), AuthenticatedPrincipal{
 		Username:    "alice",
 		TokenID:     "tok-1",
-		TokenSource: TokenSourceBootstrap,
+		TokenSource: TokenSourceManaged,
 	}, proto.HelloRequest{
 		ProjectID:   "demo",
 		SessionKind: "sidecar",

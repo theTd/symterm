@@ -6,15 +6,25 @@ set -eu
 
 SYMTERM_REPO="${SYMTERM_REPO:-${SYMTERM_GITHUB_REPO_URL:-${SYMTERM_GITHUB_REPO:-https://github.com/theTd/symterm/}}}"
 SYMTERM_VERSION="${SYMTERM_VERSION:-${SYMTERMD_VERSION:-}}"
+SYMTERM_DIST_DIR="${SYMTERM_DIST_DIR:-}"
 SYMTERM_DOWNLOAD_URL="${SYMTERM_DOWNLOAD_URL:-}"
 SYMTERMD_DOWNLOAD_URL="${SYMTERMD_DOWNLOAD_URL:-}"
 SYMTERM_INSTALL_DAEMON="${SYMTERM_INSTALL_DAEMON:-auto}"
-SYMTERMD_REMOTE_ENTRY="${SYMTERMD_REMOTE_ENTRY:-[\"bash\"]}"
-SYMTERMD_SSH_LISTEN_ADDR="${SYMTERMD_SSH_LISTEN_ADDR:-127.0.0.1:7000}"
-SYMTERMD_ADMIN_WEB_ADDR="${SYMTERMD_ADMIN_WEB_ADDR:-127.0.0.1:6040}"
-SYMTERMD_PROJECTS_ROOT="${SYMTERMD_PROJECTS_ROOT:-$HOME/.symterm}"
-SYMTERMD_ALLOW_UNSAFE_NO_FUSE="${SYMTERMD_ALLOW_UNSAFE_NO_FUSE:-0}"
-SYMTERMD_STATIC_TOKENS="${SYMTERMD_STATIC_TOKENS:-}"
+DEFAULT_SYMTERMD_REMOTE_ENTRY='["bash"]'
+DEFAULT_SYMTERMD_SSH_LISTEN_ADDR="127.0.0.1:7000"
+DEFAULT_SYMTERMD_ADMIN_WEB_ADDR="127.0.0.1:6040"
+DEFAULT_SYMTERMD_PROJECTS_ROOT="$HOME/.symterm"
+DEFAULT_SYMTERMD_ALLOW_UNSAFE_NO_FUSE="0"
+SYMTERMD_REMOTE_ENTRY="${SYMTERMD_REMOTE_ENTRY:-$DEFAULT_SYMTERMD_REMOTE_ENTRY}"
+SYMTERMD_SSH_LISTEN_ADDR="${SYMTERMD_SSH_LISTEN_ADDR:-$DEFAULT_SYMTERMD_SSH_LISTEN_ADDR}"
+SYMTERMD_ADMIN_WEB_ADDR="${SYMTERMD_ADMIN_WEB_ADDR:-$DEFAULT_SYMTERMD_ADMIN_WEB_ADDR}"
+SYMTERMD_PROJECTS_ROOT="${SYMTERMD_PROJECTS_ROOT:-$DEFAULT_SYMTERMD_PROJECTS_ROOT}"
+SYMTERMD_ALLOW_UNSAFE_NO_FUSE="${SYMTERMD_ALLOW_UNSAFE_NO_FUSE:-$DEFAULT_SYMTERMD_ALLOW_UNSAFE_NO_FUSE}"
+EXISTING_SYMTERMD_REMOTE_ENTRY=""
+EXISTING_SYMTERMD_SSH_LISTEN_ADDR=""
+EXISTING_SYMTERMD_ADMIN_WEB_ADDR=""
+EXISTING_SYMTERMD_PROJECTS_ROOT=""
+EXISTING_SYMTERMD_ALLOW_UNSAFE_NO_FUSE=""
 BASH_COMPLETION_DIR="${BASH_COMPLETION_DIR:-}"
 
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/.local/lib/symterm}"
@@ -38,10 +48,22 @@ expand_path() {
   esac
 }
 
+normalize_dist_dir() {
+  dist_dir="$(expand_path "$1")"
+  while [ -n "$dist_dir" ] && [ "$dist_dir" != "/" ] && [ "${dist_dir%/}" != "$dist_dir" ]; do
+    dist_dir="${dist_dir%/}"
+  done
+  if [ -d "$dist_dir/dist" ] && [ ! -f "$dist_dir/metadata.json" ] && [ ! -f "$dist_dir/artifacts.json" ]; then
+    dist_dir="$dist_dir/dist"
+  fi
+  printf '%s\n' "$dist_dir"
+}
+
 INSTALL_ROOT="$(expand_path "$INSTALL_ROOT")"
 LINK_DIR="$(expand_path "$LINK_DIR")"
 USER_UNIT_DIR="$(expand_path "$USER_UNIT_DIR")"
 BASH_COMPLETION_DIR="$(expand_path "$BASH_COMPLETION_DIR")"
+SYMTERM_DIST_DIR="$(normalize_dist_dir "$SYMTERM_DIST_DIR")"
 
 BIN_DIR="$INSTALL_ROOT/bin"
 RUN_DIR="$INSTALL_ROOT/run"
@@ -82,7 +104,7 @@ maybe_reexec_with_bash() {
 
 usage() {
   cat <<EOF
-Usage: ./tools/install-symterm.sh [--skip-setup-wizard] [--install-daemon] [--skip-daemon]
+Usage: ./tools/install-symterm.sh [--skip-setup-wizard] [--install-daemon] [--skip-daemon] [--dist-dir PATH]
 
 Installs or upgrades symterm, then optionally installs symtermd.
 
@@ -90,6 +112,7 @@ Options:
   --skip-setup-wizard  Use current or exported daemon values without prompting.
   --install-daemon     Force daemon install without prompting.
   --skip-daemon        Install only the client.
+  --dist-dir PATH      Install from a local GoReleaser dist directory instead of GitHub releases.
   -h, --help           Show this help.
 EOF
 }
@@ -105,6 +128,18 @@ parse_args() {
         ;;
       --skip-daemon)
         SYMTERM_INSTALL_DAEMON="no"
+        ;;
+      --dist-dir)
+        shift
+        if [ "$#" -eq 0 ]; then
+          echo "missing required value for --dist-dir" >&2
+          usage >&2
+          exit 1
+        fi
+        SYMTERM_DIST_DIR="$(normalize_dist_dir "$1")"
+        ;;
+      --dist-dir=*)
+        SYMTERM_DIST_DIR="$(normalize_dist_dir "${1#--dist-dir=}")"
         ;;
       -h|--help)
         usage
@@ -276,6 +311,16 @@ detect_platform() {
 resolve_release_version() {
   if has_value "$SYMTERM_VERSION"; then
     RESOLVED_VERSION="$SYMTERM_VERSION"
+  elif has_value "$SYMTERM_DIST_DIR"; then
+    if [ -f "$SYMTERM_DIST_DIR/metadata.json" ]; then
+      RESOLVED_VERSION="$(sed -n 's/.*"tag":"\([^"]*\)".*/\1/p' "$SYMTERM_DIST_DIR/metadata.json" | head -n 1)"
+      if [ "$RESOLVED_VERSION" = "v0.0.0" ] || [ -z "$RESOLVED_VERSION" ]; then
+        RESOLVED_VERSION="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$SYMTERM_DIST_DIR/metadata.json" | head -n 1)"
+      fi
+    fi
+    if [ -z "$RESOLVED_VERSION" ]; then
+      RESOLVED_VERSION="local-dist"
+    fi
   else
     release_json="$(github_api_get "https://api.github.com/repos/$REPO_SLUG/releases/latest")"
     RESOLVED_VERSION="$(printf '%s\n' "$release_json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
@@ -294,6 +339,45 @@ release_asset_name() {
 release_asset_url() {
   asset_name="$(release_asset_name "$1")"
   printf 'https://github.com/%s/releases/download/%s/%s\n' "$REPO_SLUG" "$RESOLVED_VERSION" "$asset_name"
+}
+
+resolve_local_dist_source() {
+  binary_name="$1"
+  if ! has_value "$SYMTERM_DIST_DIR"; then
+    echo "missing required value for SYMTERM_DIST_DIR" >&2
+    exit 1
+  fi
+  if [ ! -d "$SYMTERM_DIST_DIR" ]; then
+    echo "local dist directory not found: $SYMTERM_DIST_DIR" >&2
+    exit 1
+  fi
+
+  binary_path="$(find "$SYMTERM_DIST_DIR" -maxdepth 2 -type f \( -path "$SYMTERM_DIST_DIR/${binary_name}_${RELEASE_OS}_${RELEASE_ARCH}_*/$binary_name" -o -path "$SYMTERM_DIST_DIR/${binary_name}_${RELEASE_OS}_${RELEASE_ARCH}_*/$binary_name.exe" \) | head -n 1)"
+  if [ -n "$binary_path" ]; then
+    printf '%s\n' "$binary_path"
+    return 0
+  fi
+
+  archive_path="$(find "$SYMTERM_DIST_DIR" -maxdepth 1 -type f \( -name "symterm_${binary_name}_*_${RELEASE_OS}_${RELEASE_ARCH}.tar.gz" -o -name "symterm_${binary_name}_*_${RELEASE_OS}_${RELEASE_ARCH}.tgz" \) | head -n 1)"
+  if [ -n "$archive_path" ]; then
+    printf '%s\n' "$archive_path"
+    return 0
+  fi
+
+  echo "failed to locate $binary_name for $RELEASE_OS/$RELEASE_ARCH under local dist directory: $SYMTERM_DIST_DIR" >&2
+  exit 1
+}
+
+resolve_install_source() {
+  explicit_source_url="$1"
+  binary_name="$2"
+  if has_value "$explicit_source_url"; then
+    printf '%s\n' "$explicit_source_url"
+  elif has_value "$SYMTERM_DIST_DIR"; then
+    resolve_local_dist_source "$binary_name"
+  else
+    release_asset_url "$binary_name"
+  fi
 }
 
 install_binary_from_source() {
@@ -386,11 +470,23 @@ is_interactive_terminal() {
 prompt_default() {
   label="$1"
   default_value="$2"
+  initial_value="${3-}"
+  if [ -z "$initial_value" ]; then
+    initial_value="$default_value"
+  fi
   if [ -n "${BASH_VERSION:-}" ]; then
     if [ -n "$default_value" ]; then
-      read -e -r -p "$label [$default_value]: " -i "$default_value" value || true
+      if [ -n "$initial_value" ]; then
+        read -e -r -p "$label [$default_value]: " -i "$initial_value" value || true
+      else
+        read -e -r -p "$label [$default_value]: " value || true
+      fi
     else
-      read -e -r -p "$label: " value || true
+      if [ -n "$initial_value" ]; then
+        read -e -r -p "$label: " -i "$initial_value" value || true
+      else
+        read -e -r -p "$label: " value || true
+      fi
     fi
   else
     if [ -n "$default_value" ]; then
@@ -401,14 +497,14 @@ prompt_default() {
     IFS= read -r value || true
   fi
   if [ -z "$value" ]; then
-    value="$default_value"
+    value="$initial_value"
   fi
   printf '%s\n' "$value"
 }
 
 prompt_required_default() {
   while :; do
-    value="$(prompt_default "$1" "$2")"
+    value="$(prompt_default "$1" "$2" "${3-}")"
     if [ -n "$(printf '%s' "$value" | tr -d '[:space:]')" ]; then
       printf '%s\n' "$value"
       return 0
@@ -420,6 +516,7 @@ prompt_required_default() {
 prompt_yes_no_default() {
   label="$1"
   default_choice="$(lowercase "$2")"
+  initial_choice="$(lowercase "${3-$2}")"
   case "$default_choice" in
     1|yes|true|on)
       default_value="yes"
@@ -428,8 +525,19 @@ prompt_yes_no_default() {
       default_value="no"
       ;;
   esac
+  case "$initial_choice" in
+    1|yes|true|on)
+      initial_value="yes"
+      ;;
+    0|false|no|off)
+      initial_value="no"
+      ;;
+    *)
+      initial_value="$default_value"
+      ;;
+  esac
   while :; do
-    value="$(prompt_default "$label (yes/no)" "$default_value")"
+    value="$(prompt_default "$label (yes/no)" "$default_value" "$initial_value")"
     case "$(lowercase "$value")" in
       y|yes)
         printf '1\n'
@@ -448,7 +556,7 @@ prompt_yes_no_default() {
 
 prompt_remote_entry_json() {
   while :; do
-    value="$(prompt_required_default "Remote entry JSON argv" "$1")"
+    value="$(prompt_required_default "Remote entry JSON argv" "$1" "${2-$1}")"
     case "$value" in
       \[*\])
         printf '%s\n' "$value"
@@ -484,15 +592,18 @@ load_existing_env_defaults() {
     return
   fi
   input_projects_root="$SYMTERMD_PROJECTS_ROOT"
-  input_static_tokens="$SYMTERMD_STATIC_TOKENS"
   input_remote_entry="$SYMTERMD_REMOTE_ENTRY"
   input_ssh_listen_addr="$SYMTERMD_SSH_LISTEN_ADDR"
   input_admin_web_addr="$SYMTERMD_ADMIN_WEB_ADDR"
   input_allow_unsafe_no_fuse="$SYMTERMD_ALLOW_UNSAFE_NO_FUSE"
   # shellcheck disable=SC1090
   . "$ENV_FILE"
+  if has_value "$SYMTERMD_PROJECTS_ROOT"; then EXISTING_SYMTERMD_PROJECTS_ROOT="$SYMTERMD_PROJECTS_ROOT"; fi
+  if has_value "$SYMTERMD_REMOTE_ENTRY"; then EXISTING_SYMTERMD_REMOTE_ENTRY="$SYMTERMD_REMOTE_ENTRY"; fi
+  if has_value "$SYMTERMD_SSH_LISTEN_ADDR"; then EXISTING_SYMTERMD_SSH_LISTEN_ADDR="$SYMTERMD_SSH_LISTEN_ADDR"; fi
+  if has_value "$SYMTERMD_ADMIN_WEB_ADDR"; then EXISTING_SYMTERMD_ADMIN_WEB_ADDR="$SYMTERMD_ADMIN_WEB_ADDR"; fi
+  if has_value "$SYMTERMD_ALLOW_UNSAFE_NO_FUSE"; then EXISTING_SYMTERMD_ALLOW_UNSAFE_NO_FUSE="$SYMTERMD_ALLOW_UNSAFE_NO_FUSE"; fi
   if has_value "$input_projects_root"; then SYMTERMD_PROJECTS_ROOT="$input_projects_root"; fi
-  if has_value "$input_static_tokens"; then SYMTERMD_STATIC_TOKENS="$input_static_tokens"; fi
   if has_value "$input_remote_entry"; then SYMTERMD_REMOTE_ENTRY="$input_remote_entry"; fi
   if has_value "$input_ssh_listen_addr"; then SYMTERMD_SSH_LISTEN_ADDR="$input_ssh_listen_addr"; fi
   if has_value "$input_admin_web_addr"; then SYMTERMD_ADMIN_WEB_ADDR="$input_admin_web_addr"; fi
@@ -510,11 +621,11 @@ run_setup_wizard() {
   echo "symtermd setup wizard"
   echo "Configure the daemon environment before install."
   echo
-  SYMTERMD_PROJECTS_ROOT="$(prompt_required_default "Projects root" "$SYMTERMD_PROJECTS_ROOT")"
-  SYMTERMD_REMOTE_ENTRY="$(prompt_remote_entry_json "$SYMTERMD_REMOTE_ENTRY")"
-  SYMTERMD_SSH_LISTEN_ADDR="$(prompt_required_default "SSH listen address" "$SYMTERMD_SSH_LISTEN_ADDR")"
-  SYMTERMD_ADMIN_WEB_ADDR="$(prompt_required_default "Admin web address" "$SYMTERMD_ADMIN_WEB_ADDR")"
-  SYMTERMD_ALLOW_UNSAFE_NO_FUSE="$(prompt_yes_no_default "Allow unsafe no FUSE for local testing" "$SYMTERMD_ALLOW_UNSAFE_NO_FUSE")"
+  SYMTERMD_PROJECTS_ROOT="$(prompt_required_default "Projects root" "$DEFAULT_SYMTERMD_PROJECTS_ROOT" "${EXISTING_SYMTERMD_PROJECTS_ROOT:-$SYMTERMD_PROJECTS_ROOT}")"
+  SYMTERMD_REMOTE_ENTRY="$(prompt_remote_entry_json "$DEFAULT_SYMTERMD_REMOTE_ENTRY" "${EXISTING_SYMTERMD_REMOTE_ENTRY:-$SYMTERMD_REMOTE_ENTRY}")"
+  SYMTERMD_SSH_LISTEN_ADDR="$(prompt_required_default "SSH listen address" "$DEFAULT_SYMTERMD_SSH_LISTEN_ADDR" "${EXISTING_SYMTERMD_SSH_LISTEN_ADDR:-$SYMTERMD_SSH_LISTEN_ADDR}")"
+  SYMTERMD_ADMIN_WEB_ADDR="$(prompt_required_default "Admin web address" "$DEFAULT_SYMTERMD_ADMIN_WEB_ADDR" "${EXISTING_SYMTERMD_ADMIN_WEB_ADDR:-$SYMTERMD_ADMIN_WEB_ADDR}")"
+  SYMTERMD_ALLOW_UNSAFE_NO_FUSE="$(prompt_yes_no_default "Allow unsafe no FUSE for local testing" "$DEFAULT_SYMTERMD_ALLOW_UNSAFE_NO_FUSE" "${EXISTING_SYMTERMD_ALLOW_UNSAFE_NO_FUSE:-$SYMTERMD_ALLOW_UNSAFE_NO_FUSE}")"
   echo
 }
 
@@ -522,7 +633,6 @@ write_env_file() {
   mkdir -p "$CONFIG_DIR" "$RUN_DIR"
   cat >"$ENV_FILE" <<EOF
 SYMTERMD_PROJECTS_ROOT=$(quote_env_value "$SYMTERMD_PROJECTS_ROOT")
-SYMTERMD_STATIC_TOKENS=$(quote_env_value "$SYMTERMD_STATIC_TOKENS")
 SYMTERMD_REMOTE_ENTRY=$(quote_env_value "$SYMTERMD_REMOTE_ENTRY")
 SYMTERMD_SSH_LISTEN_ADDR=$(quote_env_value "$SYMTERMD_SSH_LISTEN_ADDR")
 SYMTERMD_ADMIN_WEB_ADDR=$(quote_env_value "$SYMTERMD_ADMIN_WEB_ADDR")
@@ -822,10 +932,7 @@ install_bash_completion() {
 }
 
 install_client() {
-  source_url="$SYMTERM_DOWNLOAD_URL"
-  if ! has_value "$source_url"; then
-    source_url="$(release_asset_url "symterm")"
-  fi
+  source_url="$(resolve_install_source "$SYMTERM_DOWNLOAD_URL" "symterm")"
   install_binary_from_source "$source_url" "symterm" "$CLIENT_BIN_PATH"
   CLIENT_LINK_PATH="$(link_command "$CLIENT_BIN_PATH" "symterm")"
   install_bash_completion
@@ -875,10 +982,7 @@ install_daemon() {
   run_setup_wizard
   validate_remote_entry
   stop_existing_service
-  source_url="$SYMTERMD_DOWNLOAD_URL"
-  if ! has_value "$source_url"; then
-    source_url="$(release_asset_url "symtermd")"
-  fi
+  source_url="$(resolve_install_source "$SYMTERMD_DOWNLOAD_URL" "symtermd")"
   install_binary_from_source "$source_url" "symtermd" "$DAEMON_BIN_PATH"
   write_env_file
   DAEMON_LINK_PATH="$(link_command "$DAEMON_BIN_PATH" "symtermd")"
@@ -896,7 +1000,11 @@ install_daemon() {
 
 print_summary() {
   echo "symterm $RESOLVED_VERSION installed"
-  echo "repo: $REPO_URL"
+  if has_value "$SYMTERM_DIST_DIR"; then
+    echo "source: local dist ($SYMTERM_DIST_DIR)"
+  else
+    echo "repo: $REPO_URL"
+  fi
   echo "client binary path: $CLIENT_BIN_PATH"
   echo "client command link: $CLIENT_LINK_PATH"
   echo "bash completion path: $BASH_COMPLETION_PATH"
@@ -915,7 +1023,9 @@ print_summary() {
 main() {
   maybe_reexec_with_bash "$@"
   parse_args "$@"
-  normalize_repo_slug "$SYMTERM_REPO"
+  if ! has_value "$SYMTERM_DIST_DIR"; then
+    normalize_repo_slug "$SYMTERM_REPO"
+  fi
   detect_platform
   resolve_release_version
   install_client

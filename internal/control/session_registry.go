@@ -75,7 +75,7 @@ func newSessionRegistry() *SessionRegistry {
 func (r *SessionRegistry) Hello(username string, request proto.HelloRequest) HelloResponse {
 	return r.HelloPrincipal(AuthenticatedPrincipal{
 		Username:    username,
-		TokenSource: TokenSourceBootstrap,
+		TokenSource: TokenSourceManaged,
 	}, request, time.Now().UTC())
 }
 

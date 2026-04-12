@@ -66,6 +66,12 @@ func TestStoreManagedTokenLifecycle(t *testing.T) {
 	if _, err := store.RevokeToken(issued.Record.TokenID, now); err != nil {
 		t.Fatalf("RevokeToken() error = %v", err)
 	}
+	if got := len(store.ListTokens("alice")); got != 0 {
+		t.Fatalf("ListTokens(alice) len after revoke = %d, want 0", got)
+	}
+	if user, ok := store.GetUser("alice"); !ok || len(user.TokenIDs) != 0 {
+		t.Fatalf("GetUser(alice) token ids after revoke = %#v, %v", user.TokenIDs, ok)
+	}
 	if _, err := store.Authenticate(context.Background(), issued.PlainSecret); err == nil {
 		t.Fatal("Authenticate() succeeded after revoke")
 	}
@@ -79,52 +85,6 @@ func TestStoreManagedTokenLifecycle(t *testing.T) {
 	}
 	if _, err := store.Authenticate(context.Background(), issued.PlainSecret); err == nil {
 		t.Fatal("Authenticate() succeeded for disabled user")
-	}
-}
-
-func TestStoreBootstrapTokenLifecycleIsImportedAndReadOnly(t *testing.T) {
-	t.Parallel()
-
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore() error = %v", err)
-	}
-	now := time.Unix(1_700_000_150, 0).UTC()
-
-	if err := store.ImportBootstrapTokens(map[string]string{"bootstrap-secret": "alice"}, now); err != nil {
-		t.Fatalf("ImportBootstrapTokens() error = %v", err)
-	}
-	if _, err := store.CreateUser("bob", "", now); err != nil {
-		t.Fatalf("CreateUser(bob) error = %v", err)
-	}
-	issued, err := store.IssueToken("bob", "cli", now)
-	if err != nil {
-		t.Fatalf("IssueToken(bob) error = %v", err)
-	}
-
-	principal, err := store.Authenticate(context.Background(), "bootstrap-secret")
-	if err != nil {
-		t.Fatalf("Authenticate(bootstrap) error = %v", err)
-	}
-	if principal.TokenSource != control.TokenSourceBootstrap {
-		t.Fatalf("Authenticate(bootstrap) source = %q, want %q", principal.TokenSource, control.TokenSourceBootstrap)
-	}
-
-	if got := len(store.ListBootstrapTokens("alice")); got != 1 {
-		t.Fatalf("ListBootstrapTokens(alice) len = %d, want 1", got)
-	}
-	if got := len(store.ListManagedTokens("bob")); got != 1 {
-		t.Fatalf("ListManagedTokens(bob) len = %d, want 1", got)
-	}
-	if got := len(store.ListTokens("")); got != 2 {
-		t.Fatalf("ListTokens(all) len = %d, want 2", got)
-	}
-
-	if _, err := store.RevokeToken("bootstrap-"+shortHash("bootstrap-secret"), now); err == nil {
-		t.Fatal("RevokeToken(bootstrap) succeeded")
-	}
-	if _, err := store.RevokeToken(issued.Record.TokenID, now); err != nil {
-		t.Fatalf("RevokeToken(managed) error = %v", err)
 	}
 }
 

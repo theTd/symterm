@@ -34,6 +34,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/admin/package-lock.json
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -87,6 +94,22 @@ jobs:
 
       - name: Run tests
         run: go test ./...
+
+      - name: Install admin web dependencies
+        working-directory: web/admin
+        run: npm ci
+
+      - name: Lint admin web
+        working-directory: web/admin
+        run: npm run lint
+
+      - name: Test admin web
+        working-directory: web/admin
+        run: npm run test
+
+      - name: Build admin web
+        working-directory: web/admin
+        run: npm run build
 
       - name: Prepare artifact directory
         shell: bash

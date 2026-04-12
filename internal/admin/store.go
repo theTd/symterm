@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -44,6 +45,30 @@ type UserTokenRecord struct {
 type IssuedToken struct {
 	Record      UserTokenRecord
 	PlainSecret string
+}
+
+type AuditRecord struct {
+	Timestamp time.Time `json:"timestamp"`
+	Action    string    `json:"action"`
+	Actor     string    `json:"actor"`
+	Target    string    `json:"target"`
+	Result    string    `json:"result"`
+}
+
+type AuditQuery struct {
+	Actor    string
+	Action   string
+	Target   string
+	Result   string
+	Page     int
+	PageSize int
+}
+
+type AuditPage struct {
+	Items    []AuditRecord `json:"items"`
+	Page     int           `json:"page"`
+	PageSize int           `json:"page_size"`
+	Total    int           `json:"total"`
 }
 
 type Store struct {
@@ -94,40 +119,6 @@ func (s *Store) reloadLocked() error {
 	}
 	s.users = users
 	s.tokens = tokens
-	return nil
-}
-
-func (s *Store) ImportBootstrapTokens(static map[string]string, now time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for secret, username := range static {
-		username = strings.TrimSpace(username)
-		if username == "" {
-			continue
-		}
-		user := s.userOrNewLocked(username, now)
-		tokenID := "bootstrap-" + shortHash(secret)
-		if _, ok := s.tokens[tokenID]; ok {
-			continue
-		}
-		token := UserTokenRecord{
-			TokenID:     tokenID,
-			Username:    username,
-			CreatedAt:   now,
-			Description: "imported bootstrap token",
-			SecretHash:  hashSecret(secret),
-			Source:      control.TokenSourceBootstrap,
-		}
-		user.TokenIDs = appendUnique(user.TokenIDs, tokenID)
-		user.UpdatedAt = now
-		if err := s.saveUserLocked(user); err != nil {
-			return err
-		}
-		if err := s.saveTokenLocked(token); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -182,30 +173,6 @@ func (s *Store) ListTokens(username string) []UserTokenRecord {
 	defer s.mu.Unlock()
 
 	return listTokenRecords(s.tokens, username, nil)
-}
-
-func (s *Store) ListBootstrapTokens(username string) []UserTokenRecord {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return listTokenRecords(s.tokens, username, func(record UserTokenRecord) bool {
-		return record.Source == control.TokenSourceBootstrap
-	})
-}
-
-func (s *Store) ListManagedTokens(username string) []UserTokenRecord {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return listTokenRecords(s.tokens, username, func(record UserTokenRecord) bool {
-		return record.Source == control.TokenSourceManaged
-	})
-}
-
-func (s *Store) ListLegacyTokens(username string) []UserTokenRecord {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return listTokenRecords(s.tokens, username, func(record UserTokenRecord) bool {
-		return record.Source == control.TokenSourceLegacy
-	})
 }
 
 func (s *Store) GetToken(tokenID string) (UserTokenRecord, bool) {
@@ -298,12 +265,17 @@ func (s *Store) RevokeToken(tokenID string, now time.Time) (UserTokenRecord, err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	record, ok := s.tokens[strings.TrimSpace(tokenID)]
+	tokenID = strings.TrimSpace(tokenID)
+	record, ok := s.tokens[tokenID]
 	if !ok {
 		return UserTokenRecord{}, proto.NewError(proto.ErrInvalidArgument, "token does not exist")
 	}
-	if record.Source == control.TokenSourceBootstrap {
-		return UserTokenRecord{}, proto.NewError(proto.ErrInvalidArgument, "bootstrap tokens are imported and cannot be revoked individually")
+	if user, ok := s.users[record.Username]; ok {
+		user.TokenIDs = removeString(user.TokenIDs, tokenID)
+		user.UpdatedAt = now
+		if err := s.saveUserLocked(user); err != nil {
+			return UserTokenRecord{}, err
+		}
 	}
 	record.RevokedAt = &now
 	if err := s.saveTokenLocked(record); err != nil {
@@ -320,7 +292,7 @@ func (s *Store) GetUserEntrypoint(username string) ([]string, error) {
 	if !ok {
 		return nil, proto.NewError(proto.ErrInvalidArgument, "user does not exist")
 	}
-	return append([]string(nil), user.DefaultEntrypoint...), nil
+	return nonNilSlice(append([]string(nil), user.DefaultEntrypoint...)), nil
 }
 
 func (s *Store) SetUserEntrypoint(username string, argv []string, now time.Time) (UserRecord, error) {
@@ -349,28 +321,97 @@ func (s *Store) EffectiveEntrypoint(username string, fallback []string) []string
 	return append([]string(nil), fallback...)
 }
 
-func (s *Store) AppendAudit(action string, actor string, target string, result string, now time.Time) error {
+func (s *Store) AppendAudit(action string, actor string, target string, result string, now time.Time) (AuditRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	entry := map[string]string{
-		"timestamp": now.Format(time.RFC3339Nano),
-		"action":    strings.TrimSpace(action),
-		"actor":     strings.TrimSpace(actor),
-		"target":    strings.TrimSpace(target),
-		"result":    strings.TrimSpace(result),
+	entry := AuditRecord{
+		Timestamp: now,
+		Action:    strings.TrimSpace(action),
+		Actor:     strings.TrimSpace(actor),
+		Target:    strings.TrimSpace(target),
+		Result:    strings.TrimSpace(result),
 	}
 	line, err := json.Marshal(entry)
 	if err != nil {
-		return err
+		return AuditRecord{}, err
 	}
 	file, err := os.OpenFile(s.auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return err
+		return AuditRecord{}, err
 	}
 	defer file.Close()
-	_, err = file.Write(append(line, '\n'))
-	return err
+	if _, err = file.Write(append(line, '\n')); err != nil {
+		return AuditRecord{}, err
+	}
+	return entry, nil
+}
+
+func (s *Store) ListAudit(query AuditQuery) (AuditPage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	page := query.Page
+	if page <= 0 {
+		page = 1
+	}
+	pageSize := query.PageSize
+	switch {
+	case pageSize <= 0:
+		pageSize = 50
+	case pageSize > 200:
+		pageSize = 200
+	}
+
+	file, err := os.Open(s.auditPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return AuditPage{Items: []AuditRecord{}, Page: page, PageSize: pageSize, Total: 0}, nil
+		}
+		return AuditPage{}, err
+	}
+	defer file.Close()
+
+	var filtered []AuditRecord
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var record AuditRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			return AuditPage{}, err
+		}
+		if !matchesAuditRecord(record, query) {
+			continue
+		}
+		filtered = append(filtered, record)
+	}
+	if err := scanner.Err(); err != nil {
+		return AuditPage{}, err
+	}
+
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].Timestamp.After(filtered[j].Timestamp)
+	})
+
+	total := len(filtered)
+	start := (page - 1) * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	items := append([]AuditRecord(nil), filtered[start:end]...)
+	return AuditPage{
+		Items:    nonNilSlice(items),
+		Page:     page,
+		PageSize: pageSize,
+		Total:    total,
+	}, nil
 }
 
 func (s *Store) userOrNewLocked(username string, now time.Time) UserRecord {
@@ -485,6 +526,20 @@ func appendUnique(items []string, value string) []string {
 	return append(items, value)
 }
 
+func removeString(items []string, value string) []string {
+	if len(items) == 0 {
+		return items
+	}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if item == value {
+			continue
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
 func sortedStrings(items []string) []string {
 	items = append([]string(nil), items...)
 	sort.Strings(items)
@@ -503,8 +558,8 @@ func sortUserRecords(records map[string]UserRecord) []UserRecord {
 }
 
 func cloneUserRecord(record UserRecord) UserRecord {
-	record.DefaultEntrypoint = append([]string(nil), record.DefaultEntrypoint...)
-	record.TokenIDs = append([]string(nil), record.TokenIDs...)
+	record.DefaultEntrypoint = nonNilSlice(append([]string(nil), record.DefaultEntrypoint...))
+	record.TokenIDs = nonNilSlice(append([]string(nil), record.TokenIDs...))
 	return record
 }
 
@@ -526,6 +581,9 @@ func listTokenRecords(records map[string]UserTokenRecord, username string, allow
 		if username != "" && token.Username != username {
 			continue
 		}
+		if token.RevokedAt != nil {
+			continue
+		}
 		if allow != nil && !allow(token) {
 			continue
 		}
@@ -537,5 +595,20 @@ func listTokenRecords(records map[string]UserTokenRecord, username string, allow
 		}
 		return tokens[i].Username < tokens[j].Username
 	})
-	return tokens
+	return nonNilSlice(tokens)
+}
+
+func matchesAuditRecord(record AuditRecord, query AuditQuery) bool {
+	return auditFieldMatches(record.Actor, query.Actor) &&
+		auditFieldMatches(record.Action, query.Action) &&
+		auditFieldMatches(record.Target, query.Target) &&
+		auditFieldMatches(record.Result, query.Result)
+}
+
+func auditFieldMatches(value string, filter string) bool {
+	filter = strings.TrimSpace(filter)
+	if filter == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(value), strings.ToLower(filter))
 }

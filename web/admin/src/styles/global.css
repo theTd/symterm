@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --surface-canvas: #061017;
+  --surface-shell: rgba(8, 19, 30, 0.8);
+  --surface-panel: rgba(9, 24, 36, 0.88);
+  --surface-card: rgba(12, 30, 43, 0.88);
+  --surface-muted: rgba(255, 255, 255, 0.05);
+  --surface-field: rgba(4, 16, 26, 0.92);
+  --foreground: #edf4f7;
+  --muted-foreground: #95a8b3;
+  --subtle-foreground: #6f8794;
+  --border-subtle: rgba(138, 171, 186, 0.14);
+  --border-strong: rgba(138, 171, 186, 0.24);
+  --border-contrast: rgba(164, 207, 223, 0.4);
+  --accent: #6cd4ab;
+  --accent-strong: #53c399;
+  --accent-foreground: #04170f;
+  --success: #7fefbb;
+  --warning: #ffc86e;
+  --danger: #ff8e84;
+  --danger-foreground: #ffd8d3;
+  --info: #88cfff;
+  --ring: #74d5b1;
+  --shadow-color: rgba(0, 0, 0, 0.38);
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    border-color: var(--border-subtle);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at top left, rgba(108, 212, 171, 0.18), transparent 28%),
+      radial-gradient(circle at 82% 18%, rgba(136, 207, 255, 0.16), transparent 26%),
+      radial-gradient(circle at bottom right, rgba(255, 200, 110, 0.08), transparent 30%),
+      linear-gradient(145deg, #061017 0%, #08131d 44%, #03090f 100%);
+    color: var(--foreground);
+    font-family: "Bahnschrift", "Segoe UI Variable Text", "Aptos", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  p {
+    margin: 0;
+  }
+
+  a {
+    color: inherit;
+  }
+
+  ::selection {
+    background: rgba(108, 212, 171, 0.25);
+    color: var(--foreground);
+  }
+}
+
+@layer utilities {
+  .bg-grid {
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    background-position: center;
+    background-size: 24px 24px;
+  }
+
+  .surface-ring {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 20px 60px var(--shadow-color);
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(149, 168, 179, 0.3);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

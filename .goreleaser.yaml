@@ -4,9 +4,13 @@ version: 2
 
 project_name: symterm
 
+dist: dist
+
 before:
   hooks:
     - go test ./...
+    - npm --prefix web/admin ci
+    - npm --prefix web/admin run build
 
 builds:
   - id: symterm

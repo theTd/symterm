@@ -11,9 +11,7 @@ import (
 type TokenSource string
 
 const (
-	TokenSourceBootstrap TokenSource = "bootstrap"
-	TokenSourceLegacy    TokenSource = "legacy"
-	TokenSourceManaged   TokenSource = "managed"
+	TokenSourceManaged TokenSource = "managed"
 )
 
 type AuthenticatedPrincipal struct {

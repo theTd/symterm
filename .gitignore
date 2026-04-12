@@ -1,1 +1,6 @@
 dist/
+web/admin/node_modules/
+web/admin/coverage/
+web/admin/.vite/
+web/admin/tsconfig.app.tsbuildinfo
+web/admin/tsconfig.node.tsbuildinfo

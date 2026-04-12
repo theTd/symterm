@@ -116,7 +116,7 @@ func newActiveCommandService(t testing.TB) (*Service, string, proto.ProjectKey) 
 	})
 	hello, err := service.HelloAuthenticated(context.Background(), AuthenticatedPrincipal{
 		Username:    "alice",
-		TokenSource: TokenSourceBootstrap,
+		TokenSource: TokenSourceManaged,
 	}, proto.HelloRequest{
 		ProjectID:          "demo",
 		TransportKind:      string(TransportKindSSH),
