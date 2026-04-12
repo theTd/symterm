@@ -75,8 +75,6 @@ func TestWorkspaceManagerPlanManifestHashesRequestsUncertainSameMetadataFiles(t 
 }
 
 func TestWorkspaceManagerPlanSyncActionsReusesRemoteHashMemo(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	manager := NewWorkspaceManager(root)
 	key := proto.ProjectKey{Username: "alice", ProjectID: "demo"}

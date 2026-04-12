@@ -44,8 +44,6 @@ func TestTmuxExecShellCommandQuotesSpecialCharacters(t *testing.T) {
 }
 
 func TestBuildTmuxLaunchPlanWrapsCommandAndHelper(t *testing.T) {
-	t.Parallel()
-
 	originalLookPath := tmuxLookPath
 	originalExecutable := currentExecutablePath
 	t.Cleanup(func() {

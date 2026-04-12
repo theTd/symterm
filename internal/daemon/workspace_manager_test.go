@@ -2517,6 +2517,13 @@ func TestWorkspaceManagerRemoteFlushStreamsLargeFileToOwner(t *testing.T) {
 	root := t.TempDir()
 	manager := NewWorkspaceManager(root)
 	key := proto.ProjectKey{Username: "alice", ProjectID: "demo"}
+	layout, err := ResolveProjectLayout(root, key)
+	if err != nil {
+		t.Fatalf("ResolveProjectLayout() error = %v", err)
+	}
+	if err := layout.EnsureDirectories(); err != nil {
+		t.Fatalf("EnsureDirectories() error = %v", err)
+	}
 
 	content := strings.Repeat("0123456789abcdef", ownerFileUploadChunkSize/16+9)
 	var began proto.OwnerFileBeginRequest
@@ -3374,6 +3381,13 @@ func TestWorkspaceManagerReleaseContextCancelsWaitingForCommitTransaction(t *tes
 	root := t.TempDir()
 	manager := NewWorkspaceManager(root)
 	key := proto.ProjectKey{Username: "alice", ProjectID: "demo"}
+	layout, err := ResolveProjectLayout(root, key)
+	if err != nil {
+		t.Fatalf("ResolveProjectLayout() error = %v", err)
+	}
+	if err := layout.EnsureDirectories(); err != nil {
+		t.Fatalf("EnsureDirectories() error = %v", err)
+	}
 
 	enterCommit := make(chan struct{}, 1)
 	releaseCommit := make(chan struct{})
