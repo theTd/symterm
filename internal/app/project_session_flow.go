@@ -110,6 +110,7 @@ func (u ProjectSessionUseCase) ConnectProjectSession(ctx context.Context) (Conne
 	if err != nil {
 		return ConnectedProjectSession{}, err
 	}
+	localSnapshot.WorkspaceInstanceID = workspaceInstanceID
 	u.tracef("workspace instance id=%s", workspaceInstanceID)
 
 	var hello control.HelloResponse
@@ -130,7 +131,16 @@ func (u ProjectSessionUseCase) ConnectProjectSession(ctx context.Context) (Conne
 	}, &hello); err != nil {
 		return ConnectedProjectSession{}, err
 	}
-	u.tracef("hello response client_id=%s username=%s", hello.ClientID, hello.Username)
+	u.tracef(
+		"hello response client_id=%s username=%s sync_protocol=%d manifest_batch=%t delete_batch=%t upload_bundle=%t hash_cache=%t",
+		hello.ClientID,
+		hello.Username,
+		hello.SyncCapabilities.ProtocolVersion,
+		hello.SyncCapabilities.ManifestBatch,
+		hello.SyncCapabilities.DeleteBatch,
+		hello.SyncCapabilities.UploadBundle,
+		hello.SyncCapabilities.PersistentHashCache,
+	)
 
 	var sessionResponse proto.ProjectSessionResponse
 	u.tracef("open_project_session project=%s", u.Config.ProjectID)
@@ -211,7 +221,7 @@ func (u ProjectSessionUseCase) prepareSession(ctx context.Context, session Conne
 		defer syncFeedback.FinishInitialSync()
 	}
 	u.tracef("%s start sync_epoch=%d", syncLabel, session.Snapshot.SyncEpoch)
-	snapshot, err := u.initialSyncer().SyncProjectWorkspace(
+	snapshot, err := u.initialSyncerForSession(session).SyncProjectWorkspace(
 		ctx,
 		u.ControlClient,
 		session.ClientID,
@@ -281,11 +291,14 @@ func (u ProjectSessionUseCase) workspaceSnapshotter() LocalWorkspaceSnapshotter 
 	return workspacesync.WorkspaceSnapshotScanner{}
 }
 
-func (u ProjectSessionUseCase) initialSyncer() ProjectInitialSyncer {
+func (u ProjectSessionUseCase) initialSyncerForSession(session ConnectedProjectSession) ProjectInitialSyncer {
 	if u.InitialSyncer != nil {
 		return u.InitialSyncer
 	}
-	return workspacesync.InitialSyncSessionRunner{}
+	return workspacesync.InitialSyncSessionRunner{
+		Capabilities: session.Hello.SyncCapabilities,
+		Tracef:       u.Tracef,
+	}
 }
 
 func (u ProjectSessionUseCase) initialSyncObserver() *workspacesync.InitialSyncObserver {

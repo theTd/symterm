@@ -34,15 +34,22 @@ type ClientService interface {
 	SubscribeProjectEvents(string, proto.WatchProjectRequest) ([]proto.ProjectEvent, uint64, <-chan struct{}, func(), error)
 	ReportSyncProgress(string, proto.ReportSyncProgressRequest) error
 	BeginSync(string, proto.BeginSyncRequest) error
+	StartSyncSession(string, proto.StartSyncSessionRequest) (proto.StartSyncSessionResponse, error)
 	ScanManifest(string, proto.ScanManifestRequest) error
+	SyncManifestBatch(string, proto.SyncManifestBatchRequest) error
 	PlanManifestHashes(string) (proto.PlanManifestHashesResponse, error)
 	PlanSyncActions(string) (proto.PlanSyncActionsResponse, error)
+	PlanSyncV2(string, proto.PlanSyncV2Request) (proto.PlanSyncV2Response, error)
 	BeginFile(string, proto.BeginFileRequest) (proto.BeginFileResponse, error)
 	ApplyChunk(string, proto.ApplyChunkRequest) error
 	CommitFile(string, proto.CommitFileRequest) error
 	AbortFile(string, proto.AbortFileRequest) error
 	DeletePath(string, proto.DeletePathRequest) error
+	DeletePathsBatch(string, proto.DeletePathsBatchRequest) error
+	UploadBundleBegin(string, proto.UploadBundleBeginRequest) (proto.UploadBundleBeginResponse, error)
+	UploadBundleCommit(string, proto.UploadBundleCommitRequest) error
 	FinalizeSync(string, proto.FinalizeSyncRequest) (proto.ProjectSnapshot, error)
+	FinalizeSyncV2(string, proto.FinalizeSyncV2Request) (proto.ProjectSnapshot, error)
 	FsReadContext(context.Context, string, proto.FsOperation, proto.FsRequest) (proto.FsReply, error)
 	FsMutationContext(context.Context, string, proto.FsMutationRequest) (proto.FsReply, error)
 	WatchInvalidate(string, proto.WatchInvalidateRequest) ([]proto.InvalidateEvent, error)

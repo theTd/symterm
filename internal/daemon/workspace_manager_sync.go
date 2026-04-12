@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"hash"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +18,7 @@ import (
 )
 
 type syncSession struct {
+	sessionID       string
 	epoch           uint64
 	attemptID       uint64
 	rootFingerprint string
@@ -25,8 +27,17 @@ type syncSession struct {
 	changedFiles    map[string]proto.ManifestEntry
 	deleted         map[string]struct{}
 	uploads         map[string]*uploadSession
+	bundles         map[string]*syncBundleSession
 	remoteHashMemo  map[string]remoteHashMemoEntry
 	nextUploadID    uint64
+	nextBundleID    uint64
+	manifestBatches uint64
+	deleteBatches   uint64
+	uploadBundles   uint64
+}
+
+type syncBundleSession struct {
+	bundleID string
 }
 
 type remoteHashMemoEntry struct {
@@ -49,33 +60,52 @@ type uploadSession struct {
 }
 
 func (m *WorkspaceManager) BeginSync(projectKey proto.ProjectKey, request proto.BeginSyncRequest) error {
+	_, err := m.startSyncSession(projectKey, proto.StartSyncSessionRequest{
+		SyncEpoch:       request.SyncEpoch,
+		AttemptID:       request.AttemptID,
+		RootFingerprint: request.RootFingerprint,
+	})
+	return err
+}
+
+func (m *WorkspaceManager) StartSyncSession(projectKey proto.ProjectKey, request proto.StartSyncSessionRequest) (proto.StartSyncSessionResponse, error) {
+	return m.startSyncSession(projectKey, request)
+}
+
+func (m *WorkspaceManager) startSyncSession(projectKey proto.ProjectKey, request proto.StartSyncSessionRequest) (proto.StartSyncSessionResponse, error) {
 	layout, err := ResolveProjectLayout(m.projectsRoot, projectKey)
 	if err != nil {
-		return fmt.Errorf("begin sync resolve layout: %w", err)
+		return proto.StartSyncSessionResponse{}, fmt.Errorf("begin sync resolve layout: %w", err)
 	}
 	if err := layout.EnsureNonMountDirectories(); err != nil {
-		return fmt.Errorf("begin sync ensure non-mount directories: %w", err)
+		return proto.StartSyncSessionResponse{}, fmt.Errorf("begin sync ensure non-mount directories: %w", err)
 	}
 	if err := ensureDirectoryPresent(layout.MountDir, 0o755); err != nil {
-		return fmt.Errorf("begin sync ensure mount directory: %w", err)
+		return proto.StartSyncSessionResponse{}, fmt.Errorf("begin sync ensure mount directory: %w", err)
 	}
 	stageRoot := filepath.Join(layout.RuntimeDir, fmt.Sprintf("sync-%d-stage", request.SyncEpoch))
 	if err := os.RemoveAll(stageRoot); err != nil {
-		return fmt.Errorf("begin sync remove stage root: %w", err)
+		return proto.StartSyncSessionResponse{}, fmt.Errorf("begin sync remove stage root: %w", err)
 	}
 	if err := os.MkdirAll(stageRoot, 0o755); err != nil {
-		return fmt.Errorf("begin sync create stage root: %w", err)
+		return proto.StartSyncSessionResponse{}, fmt.Errorf("begin sync create stage root: %w", err)
 	}
 
 	m.mu.Lock()
 	state := m.stateLocked(projectKey)
+	if err := m.ensureCommittedManifestLocked(layout, state); err != nil {
+		m.mu.Unlock()
+		return proto.StartSyncSessionResponse{}, err
+	}
 	staleSessions := make([]*syncSession, 0, len(state.sync.sessions))
 	for _, session := range state.sync.sessions {
 		staleSessions = append(staleSessions, session)
 	}
+	sessionID := fmt.Sprintf("sync-%d-%d", request.SyncEpoch, time.Now().UnixNano())
 	state.sync.activeEpoch = request.SyncEpoch
 	state.sync.sessions = map[uint64]*syncSession{
 		request.SyncEpoch: {
+			sessionID:       sessionID,
 			epoch:           request.SyncEpoch,
 			attemptID:       request.AttemptID,
 			rootFingerprint: request.RootFingerprint,
@@ -84,9 +114,12 @@ func (m *WorkspaceManager) BeginSync(projectKey proto.ProjectKey, request proto.
 			changedFiles:    make(map[string]proto.ManifestEntry),
 			deleted:         make(map[string]struct{}),
 			uploads:         make(map[string]*uploadSession),
+			bundles:         make(map[string]*syncBundleSession),
 			remoteHashMemo:  make(map[string]remoteHashMemoEntry),
 		},
 	}
+	remoteGeneration := state.committed.generation
+	remoteEntries := uint64(len(state.committed.manifest))
 	m.mu.Unlock()
 
 	for _, session := range staleSessions {
@@ -94,10 +127,16 @@ func (m *WorkspaceManager) BeginSync(projectKey proto.ProjectKey, request proto.
 			continue
 		}
 		if err := cleanupSyncSession(session); err != nil {
-			return fmt.Errorf("begin sync cleanup stale session: %w", err)
+			return proto.StartSyncSessionResponse{}, fmt.Errorf("begin sync cleanup stale session: %w", err)
 		}
 	}
-	return nil
+	return proto.StartSyncSessionResponse{
+		SessionID:             sessionID,
+		SyncEpoch:             request.SyncEpoch,
+		ProtocolVersion:       2,
+		RemoteGeneration:      remoteGeneration,
+		RemoteManifestEntries: remoteEntries,
+	}, nil
 }
 
 func (m *WorkspaceManager) ScanManifest(projectKey proto.ProjectKey, request proto.ScanManifestRequest) error {
@@ -108,6 +147,27 @@ func (m *WorkspaceManager) ScanManifest(projectKey proto.ProjectKey, request pro
 	if err != nil {
 		return err
 	}
+	for _, entry := range request.Entries {
+		if err := validateWorkspacePath(entry.Path); err != nil {
+			return err
+		}
+		session.manifest[entry.Path] = cloneManifestEntry(entry)
+	}
+	return nil
+}
+
+func (m *WorkspaceManager) SyncManifestBatch(projectKey proto.ProjectKey, request proto.SyncManifestBatchRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	session, err := m.activeSyncLocked(projectKey)
+	if err != nil {
+		return err
+	}
+	if session.sessionID != strings.TrimSpace(request.SessionID) {
+		return proto.NewError(proto.ErrSyncEpochMismatch, "sync manifest batch does not match the active sync session")
+	}
+	session.manifestBatches++
 	for _, entry := range request.Entries {
 		if err := validateWorkspacePath(entry.Path); err != nil {
 			return err
@@ -130,12 +190,17 @@ func (m *WorkspaceManager) PlanManifestHashes(projectKey proto.ProjectKey) (prot
 		m.mu.Unlock()
 		return proto.PlanManifestHashesResponse{}, err
 	}
+	if err := m.ensureCommittedManifestLocked(layout, m.stateLocked(projectKey)); err != nil {
+		m.mu.Unlock()
+		return proto.PlanManifestHashesResponse{}, err
+	}
 	entries := make([]proto.ManifestEntry, 0, len(session.manifest))
 	for _, entry := range session.manifest {
 		entries = append(entries, cloneManifestEntry(entry))
 	}
 	changedFiles := cloneManifestMap(session.changedFiles)
 	deleted := cloneWorkspaceDeleteSet(session.deleted)
+	committedEntries := cloneManifestMap(m.stateLocked(projectKey).committed.manifest)
 	m.mu.Unlock()
 
 	var paths []string
@@ -143,9 +208,14 @@ func (m *WorkspaceManager) PlanManifestHashes(projectKey proto.ProjectKey) (prot
 		if entry.IsDir {
 			continue
 		}
-		remoteEntry, _, exists, err := remoteManifestEntryForPath(layout, session, entry.Path, changedFiles, deleted)
+		remoteEntry, _, exists, err := remoteManifestEntryForPath(layout, session, committedEntries, entry.Path, changedFiles, deleted)
 		if err != nil {
 			return proto.PlanManifestHashesResponse{}, err
+		}
+		if exists && !remoteEntry.IsDir && normalizeMetadata(remoteEntry.Metadata) != normalizeMetadata(entry.Metadata) {
+			if refreshed, _, refreshedExists, refreshErr := refreshRemoteManifestEntry(layout, entry.Path); refreshErr == nil && refreshedExists {
+				remoteEntry = refreshed
+			}
 		}
 		if !exists || remoteEntry.IsDir {
 			continue
@@ -172,12 +242,17 @@ func (m *WorkspaceManager) PlanSyncActions(projectKey proto.ProjectKey) (proto.P
 		m.mu.Unlock()
 		return proto.PlanSyncActionsResponse{}, err
 	}
+	if err := m.ensureCommittedManifestLocked(layout, m.stateLocked(projectKey)); err != nil {
+		m.mu.Unlock()
+		return proto.PlanSyncActionsResponse{}, err
+	}
 	entries := make([]proto.ManifestEntry, 0, len(session.manifest))
 	for _, entry := range session.manifest {
 		entries = append(entries, cloneManifestEntry(entry))
 	}
 	changedFiles := cloneManifestMap(session.changedFiles)
 	deleted := cloneWorkspaceDeleteSet(session.deleted)
+	committedEntries := cloneManifestMap(m.stateLocked(projectKey).committed.manifest)
 	m.mu.Unlock()
 
 	uploadPaths := make([]string, 0)
@@ -187,9 +262,16 @@ func (m *WorkspaceManager) PlanSyncActions(projectKey proto.ProjectKey) (proto.P
 		if entry.IsDir {
 			continue
 		}
-		remoteEntry, remotePath, exists, err := remoteManifestEntryForPath(layout, session, entry.Path, changedFiles, deleted)
+		remoteEntry, remotePath, exists, err := remoteManifestEntryForPath(layout, session, committedEntries, entry.Path, changedFiles, deleted)
 		if err != nil {
 			return proto.PlanSyncActionsResponse{}, err
+		}
+		if exists && !remoteEntry.IsDir && normalizeMetadata(remoteEntry.Metadata) != normalizeMetadata(entry.Metadata) {
+			if refreshed, refreshedPath, refreshedExists, refreshErr := refreshRemoteManifestEntry(layout, entry.Path); refreshErr == nil {
+				exists = refreshedExists
+				remoteEntry = refreshed
+				remotePath = refreshedPath
+			}
 		}
 		switch {
 		case !exists:
@@ -201,7 +283,7 @@ func (m *WorkspaceManager) PlanSyncActions(projectKey proto.ProjectKey) (proto.P
 		case strings.TrimSpace(entry.ContentHash) == "":
 			return proto.PlanSyncActionsResponse{}, proto.NewError(proto.ErrInvalidArgument, "manifest file is missing a required content hash")
 		default:
-			hashValue, hashErr := m.remoteContentHash(session, entry.Path, remotePath)
+			hashValue, hashErr := m.remoteContentHash(session, committedEntries, entry.Path, remotePath)
 			if hashErr != nil {
 				return proto.PlanSyncActionsResponse{}, hashErr
 			}
@@ -211,12 +293,8 @@ func (m *WorkspaceManager) PlanSyncActions(projectKey proto.ProjectKey) (proto.P
 		}
 	}
 
-	existing, err := listWorkspaceEntries(layout.WorkspaceDir)
-	if err != nil {
-		return proto.PlanSyncActionsResponse{}, err
-	}
 	deletePaths := make([]string, 0)
-	for _, path := range existing {
+	for path := range committedEntries {
 		if _, ok := manifestPaths[path]; ok {
 			continue
 		}
@@ -230,6 +308,102 @@ func (m *WorkspaceManager) PlanSyncActions(projectKey proto.ProjectKey) (proto.P
 	sort.Strings(deletePaths)
 	traceSyncStage(projectKey, "plan_sync_actions", started, "uploads", len(uploadPaths), "deletes", len(deletePaths))
 	return proto.PlanSyncActionsResponse{
+		UploadPaths: uniqueStrings(uploadPaths),
+		DeletePaths: uniqueStrings(deletePaths),
+	}, nil
+}
+
+func (m *WorkspaceManager) PlanSyncV2(projectKey proto.ProjectKey, request proto.PlanSyncV2Request) (proto.PlanSyncV2Response, error) {
+	layout, err := ResolveProjectLayout(m.projectsRoot, projectKey)
+	if err != nil {
+		return proto.PlanSyncV2Response{}, err
+	}
+
+	started := time.Now()
+	m.mu.Lock()
+	state := m.stateLocked(projectKey)
+	if err := m.ensureCommittedManifestLocked(layout, state); err != nil {
+		m.mu.Unlock()
+		return proto.PlanSyncV2Response{}, err
+	}
+	session, err := m.activeSyncLocked(projectKey)
+	if err != nil {
+		m.mu.Unlock()
+		return proto.PlanSyncV2Response{}, err
+	}
+	if session.sessionID != strings.TrimSpace(request.SessionID) {
+		m.mu.Unlock()
+		return proto.PlanSyncV2Response{}, proto.NewError(proto.ErrSyncEpochMismatch, "plan sync v2 does not match the active sync session")
+	}
+	entries := make([]proto.ManifestEntry, 0, len(session.manifest))
+	for _, entry := range session.manifest {
+		entries = append(entries, cloneManifestEntry(entry))
+	}
+	changedFiles := cloneManifestMap(session.changedFiles)
+	deleted := cloneWorkspaceDeleteSet(session.deleted)
+	committedEntries := cloneManifestMap(state.committed.manifest)
+	m.mu.Unlock()
+
+	hashPaths := make([]string, 0)
+	uploadPaths := make([]string, 0)
+	manifestPaths := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		manifestPaths[entry.Path] = struct{}{}
+		if entry.IsDir {
+			continue
+		}
+		remoteEntry, remotePath, exists, err := remoteManifestEntryForPath(layout, session, committedEntries, entry.Path, changedFiles, deleted)
+		if err != nil {
+			return proto.PlanSyncV2Response{}, err
+		}
+		if exists && !remoteEntry.IsDir && normalizeMetadata(remoteEntry.Metadata) != normalizeMetadata(entry.Metadata) {
+			if refreshed, refreshedPath, refreshedExists, refreshErr := refreshRemoteManifestEntry(layout, entry.Path); refreshErr == nil {
+				exists = refreshedExists
+				remoteEntry = refreshed
+				remotePath = refreshedPath
+			}
+		}
+		switch {
+		case !exists:
+			uploadPaths = append(uploadPaths, entry.Path)
+		case remoteEntry.IsDir:
+			uploadPaths = append(uploadPaths, entry.Path)
+		case normalizeMetadata(remoteEntry.Metadata) != normalizeMetadata(entry.Metadata):
+			uploadPaths = append(uploadPaths, entry.Path)
+		case strings.TrimSpace(entry.ContentHash) == "":
+			hashPaths = append(hashPaths, entry.Path)
+		default:
+			hashValue, hashErr := m.remoteContentHash(session, committedEntries, entry.Path, remotePath)
+			if hashErr != nil {
+				return proto.PlanSyncV2Response{}, hashErr
+			}
+			if hashValue != entry.ContentHash {
+				uploadPaths = append(uploadPaths, entry.Path)
+			}
+		}
+	}
+	if len(hashPaths) > 0 {
+		sort.Strings(hashPaths)
+		traceSyncStage(projectKey, "plan_sync_v2_hashes", started, "hash_paths", len(hashPaths), "manifest_batches", session.manifestBatches)
+		return proto.PlanSyncV2Response{HashPaths: uniqueStrings(hashPaths)}, nil
+	}
+
+	deletePaths := make([]string, 0)
+	for path := range committedEntries {
+		if _, ok := manifestPaths[path]; ok {
+			continue
+		}
+		if isPathDeletedOrNested(path, deleted) {
+			continue
+		}
+		deletePaths = append(deletePaths, path)
+	}
+
+	sort.Strings(uploadPaths)
+	sort.Strings(deletePaths)
+	traceSyncStage(projectKey, "plan_sync_v2", started, "uploads", len(uploadPaths), "deletes", len(deletePaths), "manifest_batches", session.manifestBatches)
+	return proto.PlanSyncV2Response{
+		HashPaths:   nil,
 		UploadPaths: uniqueStrings(uploadPaths),
 		DeletePaths: uniqueStrings(deletePaths),
 	}, nil
@@ -415,6 +589,111 @@ func (m *WorkspaceManager) DeletePath(projectKey proto.ProjectKey, request proto
 	return nil
 }
 
+func (m *WorkspaceManager) DeletePathsBatch(projectKey proto.ProjectKey, request proto.DeletePathsBatchRequest) error {
+	m.mu.Lock()
+	session, err := m.activeSyncLocked(projectKey)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if session.sessionID != strings.TrimSpace(request.SessionID) {
+		m.mu.Unlock()
+		return proto.NewError(proto.ErrSyncEpochMismatch, "delete batch does not match the active sync session")
+	}
+	session.deleteBatches++
+	m.mu.Unlock()
+
+	for _, path := range request.Paths {
+		if err := m.DeletePath(projectKey, proto.DeletePathRequest{
+			SyncEpoch: request.SyncEpoch,
+			Path:      path,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *WorkspaceManager) UploadBundleBegin(projectKey proto.ProjectKey, request proto.UploadBundleBeginRequest) (proto.UploadBundleBeginResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	session, err := m.activeSyncLocked(projectKey)
+	if err != nil {
+		return proto.UploadBundleBeginResponse{}, err
+	}
+	if session.epoch != request.SyncEpoch {
+		return proto.UploadBundleBeginResponse{}, proto.NewError(proto.ErrSyncEpochMismatch, "upload bundle does not match the active sync epoch")
+	}
+	if session.sessionID != strings.TrimSpace(request.SessionID) {
+		return proto.UploadBundleBeginResponse{}, proto.NewError(proto.ErrSyncEpochMismatch, "upload bundle does not match the active sync session")
+	}
+	session.nextBundleID++
+	bundleID := fmt.Sprintf("bundle-%04d", session.nextBundleID)
+	session.bundles[bundleID] = &syncBundleSession{bundleID: bundleID}
+	return proto.UploadBundleBeginResponse{BundleID: bundleID}, nil
+}
+
+func (m *WorkspaceManager) UploadBundleCommit(projectKey proto.ProjectKey, request proto.UploadBundleCommitRequest) error {
+	m.mu.Lock()
+	session, err := m.activeSyncLocked(projectKey)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if session.sessionID != strings.TrimSpace(request.SessionID) {
+		m.mu.Unlock()
+		return proto.NewError(proto.ErrSyncEpochMismatch, "upload bundle does not match the active sync session")
+	}
+	if _, ok := session.bundles[request.BundleID]; !ok {
+		m.mu.Unlock()
+		return proto.NewError(proto.ErrUnknownFile, "upload bundle handle does not exist")
+	}
+	delete(session.bundles, request.BundleID)
+	session.uploadBundles++
+	m.mu.Unlock()
+
+	for _, file := range request.Files {
+		if err := validateWorkspacePath(file.Path); err != nil {
+			return err
+		}
+		if hash := syncSHA256Hex(file.Data); hash != file.ContentHash {
+			return proto.NewError(proto.ErrFileCommitFailed, "uploaded bundle file hash does not match the committed hash")
+		}
+		if int64(len(file.Data)) != file.Metadata.Size {
+			return proto.NewError(proto.ErrFileCommitFailed, "uploaded bundle file size does not match the expected size")
+		}
+		target := syncWorkspacePath(session, file.Path)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return wrapOwnerWriteError(err)
+		}
+		if err := os.WriteFile(target, file.Data, fs.FileMode(file.Metadata.Mode)); err != nil {
+			return wrapOwnerWriteError(err)
+		}
+		if err := applyFileMetadata(target, normalizeMetadata(file.Metadata)); err != nil {
+			return wrapOwnerWriteError(err)
+		}
+		m.mu.Lock()
+		current, currentErr := m.activeSyncLocked(projectKey)
+		if currentErr == nil {
+			entry, ok := current.manifest[file.Path]
+			if !ok {
+				entry = proto.ManifestEntry{Path: file.Path}
+			}
+			entry.Metadata = normalizeMetadata(file.Metadata)
+			entry.ContentHash = file.ContentHash
+			entry.StatFingerprint = file.StatFingerprint
+			current.changedFiles[file.Path] = cloneManifestEntry(entry)
+			delete(current.deleted, file.Path)
+		}
+		m.mu.Unlock()
+		if currentErr != nil {
+			return currentErr
+		}
+	}
+	return nil
+}
+
 func (m *WorkspaceManager) FinalizeSync(projectKey proto.ProjectKey, request proto.FinalizeSyncRequest) error {
 	layout, err := ResolveProjectLayout(m.projectsRoot, projectKey)
 	if err != nil {
@@ -441,9 +720,9 @@ func (m *WorkspaceManager) FinalizeSync(projectKey proto.ProjectKey, request pro
 		m.mu.Unlock()
 		return proto.NewError(proto.ErrSyncRescanMismatch, "workspace changed during initial sync")
 	}
-	if len(session.uploads) != 0 {
+	if len(session.uploads) != 0 || len(session.bundles) != 0 {
 		m.mu.Unlock()
-		return proto.NewError(proto.ErrFileCommitFailed, "cannot finalize sync with unfinished file uploads")
+		return proto.NewError(proto.ErrFileCommitFailed, "cannot finalize sync with unfinished uploads")
 	}
 	entries := cloneManifestMap(session.manifest)
 	changedFiles := cloneManifestMap(session.changedFiles)
@@ -456,10 +735,6 @@ func (m *WorkspaceManager) FinalizeSync(projectKey proto.ProjectKey, request pro
 	if err := m.publishSyncWorkspaceIncremental(layout, session, entries, changedFiles, deleted); err != nil {
 		return wrapOwnerWriteError(err)
 	}
-	publishedEntries, err := manifestEntriesFromRoot(layout.WorkspaceDir)
-	if err != nil {
-		return wrapOwnerWriteError(err)
-	}
 
 	m.mu.Lock()
 	state = m.stateLocked(projectKey)
@@ -467,14 +742,33 @@ func (m *WorkspaceManager) FinalizeSync(projectKey proto.ProjectKey, request pro
 	if state.sync.activeEpoch == request.SyncEpoch {
 		state.sync.activeEpoch = 0
 	}
-	state.syncManifestStateLocked(publishedEntries)
+	state.syncManifestStateLocked(entries)
 	m.mu.Unlock()
 	if err := cleanupSyncSession(session); err != nil {
 		return err
 	}
-	diagnostic.Error(diagnostic.Default(), "seed conservative paths for sync "+projectKey.String(), m.seedConservativePaths(context.Background(), projectKey, layout, trackedPathsForManifest(publishedEntries)))
-	traceSyncStage(projectKey, "finalize_sync", started, "changed_files", len(changedFiles), "deleted_paths", len(deleted))
+	diagnostic.Error(diagnostic.Default(), "seed conservative paths for sync "+projectKey.String(), m.seedConservativePaths(context.Background(), projectKey, layout, trackedPathsForManifest(entries)))
+	traceSyncStage(projectKey, "finalize_sync", started, "changed_files", len(changedFiles), "deleted_paths", len(deleted), "manifest_batches", session.manifestBatches, "delete_batches", session.deleteBatches, "upload_bundles", session.uploadBundles)
 	return nil
+}
+
+func (m *WorkspaceManager) FinalizeSyncV2(projectKey proto.ProjectKey, request proto.FinalizeSyncV2Request) error {
+	m.mu.Lock()
+	session, err := m.activeSyncLocked(projectKey)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if session.sessionID != strings.TrimSpace(request.SessionID) {
+		m.mu.Unlock()
+		return proto.NewError(proto.ErrSyncEpochMismatch, "finalize sync v2 does not match the active sync session")
+	}
+	m.mu.Unlock()
+	return m.FinalizeSync(projectKey, proto.FinalizeSyncRequest{
+		SyncEpoch:   request.SyncEpoch,
+		AttemptID:   request.AttemptID,
+		GuardStable: request.GuardStable,
+	})
 }
 
 func (m *WorkspaceManager) activeSyncLocked(projectKey proto.ProjectKey) (*syncSession, error) {
@@ -664,6 +958,7 @@ func (m *WorkspaceManager) publishSyncWorkspaceIncremental(
 func remoteManifestEntryForPath(
 	layout ProjectLayout,
 	session *syncSession,
+	committedEntries map[string]proto.ManifestEntry,
 	path string,
 	changedFiles map[string]proto.ManifestEntry,
 	deleted map[string]struct{},
@@ -674,6 +969,13 @@ func remoteManifestEntryForPath(
 	if changedEntry, ok := changedFiles[path]; ok {
 		return cloneManifestEntry(changedEntry), filepath.Join(session.stageRoot, filepath.FromSlash(path)), true, nil
 	}
+	if committedEntry, ok := committedEntries[path]; ok {
+		return cloneManifestEntry(committedEntry), filepath.Join(layout.WorkspaceDir, filepath.FromSlash(path)), true, nil
+	}
+	return proto.ManifestEntry{}, "", false, nil
+}
+
+func refreshRemoteManifestEntry(layout ProjectLayout, path string) (proto.ManifestEntry, string, bool, error) {
 	target := filepath.Join(layout.WorkspaceDir, filepath.FromSlash(path))
 	info, err := os.Stat(target)
 	if err != nil {
@@ -689,7 +991,10 @@ func remoteManifestEntryForPath(
 	}, target, true, nil
 }
 
-func (m *WorkspaceManager) remoteContentHash(session *syncSession, path string, target string) (string, error) {
+func (m *WorkspaceManager) remoteContentHash(session *syncSession, committedEntries map[string]proto.ManifestEntry, path string, target string) (string, error) {
+	if entry, ok := committedEntries[path]; ok && entry.ContentHash != "" {
+		return entry.ContentHash, nil
+	}
 	info, err := os.Stat(target)
 	if err != nil {
 		return "", err
@@ -722,6 +1027,28 @@ func (m *WorkspaceManager) remoteContentHash(session *syncSession, path string, 
 	}
 	m.mu.Unlock()
 	return hashValue, nil
+}
+
+func (m *WorkspaceManager) ensureCommittedManifestLocked(layout ProjectLayout, state *workspaceState) error {
+	if state == nil {
+		return nil
+	}
+	if len(state.committed.manifest) > 0 || state.committed.generation != 0 {
+		return nil
+	}
+	entries, err := manifestEntriesFromRoot(layout.WorkspaceDir)
+	if err != nil {
+		if errorsIsNotExist(err) {
+			entries = map[string]proto.ManifestEntry{}
+		} else {
+			return err
+		}
+	}
+	state.syncManifestStateLocked(entries)
+	if state.committed.generation > 0 {
+		state.committed.generation--
+	}
+	return nil
 }
 
 func syncManifestMatchesWorkspace(entries map[string]proto.ManifestEntry, root string) bool {
@@ -883,4 +1210,9 @@ func mergeStagedFilesIntoChangedSet(stageRoot string, entries map[string]proto.M
 		changedFiles[path] = entry
 	}
 	return nil
+}
+
+func syncSHA256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }

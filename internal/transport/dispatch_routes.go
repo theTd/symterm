@@ -75,8 +75,15 @@ func (s *Server) newDispatchRoutes() map[string]dispatchRoute {
 		"begin_sync": newDispatchNoResultRoute(func(_ context.Context, request Request, params proto.BeginSyncRequest) error {
 			return s.service.BeginSync(request.ClientID, params)
 		}),
+		"start_sync_session": newDispatchRoute(func(_ context.Context, request Request, params proto.StartSyncSessionRequest) (any, string, error) {
+			result, err := s.service.StartSyncSession(request.ClientID, params)
+			return result, "", err
+		}),
 		"scan_manifest": newDispatchNoResultRoute(func(_ context.Context, request Request, params proto.ScanManifestRequest) error {
 			return s.service.ScanManifest(request.ClientID, params)
+		}),
+		"sync_manifest_batch": newDispatchNoResultRoute(func(_ context.Context, request Request, params proto.SyncManifestBatchRequest) error {
+			return s.service.SyncManifestBatch(request.ClientID, params)
 		}),
 		"plan_manifest_hashes": newDispatchRoute(func(_ context.Context, request Request, _ struct{}) (any, string, error) {
 			result, err := s.service.PlanManifestHashes(request.ClientID)
@@ -84,6 +91,10 @@ func (s *Server) newDispatchRoutes() map[string]dispatchRoute {
 		}),
 		"plan_sync_actions": newDispatchRoute(func(_ context.Context, request Request, _ struct{}) (any, string, error) {
 			result, err := s.service.PlanSyncActions(request.ClientID)
+			return result, "", err
+		}),
+		"plan_sync_v2": newDispatchRoute(func(_ context.Context, request Request, params proto.PlanSyncV2Request) (any, string, error) {
+			result, err := s.service.PlanSyncV2(request.ClientID, params)
 			return result, "", err
 		}),
 		"begin_file": newDispatchRoute(func(_ context.Context, request Request, params proto.BeginFileRequest) (any, string, error) {
@@ -102,8 +113,22 @@ func (s *Server) newDispatchRoutes() map[string]dispatchRoute {
 		"delete_path": newDispatchNoResultRoute(func(_ context.Context, request Request, params proto.DeletePathRequest) error {
 			return s.service.DeletePath(request.ClientID, params)
 		}),
+		"delete_paths_batch": newDispatchNoResultRoute(func(_ context.Context, request Request, params proto.DeletePathsBatchRequest) error {
+			return s.service.DeletePathsBatch(request.ClientID, params)
+		}),
+		"upload_bundle_begin": newDispatchRoute(func(_ context.Context, request Request, params proto.UploadBundleBeginRequest) (any, string, error) {
+			result, err := s.service.UploadBundleBegin(request.ClientID, params)
+			return result, "", err
+		}),
+		"upload_bundle_commit": newDispatchNoResultRoute(func(_ context.Context, request Request, params proto.UploadBundleCommitRequest) error {
+			return s.service.UploadBundleCommit(request.ClientID, params)
+		}),
 		"finalize_sync": newDispatchRoute(func(_ context.Context, request Request, params proto.FinalizeSyncRequest) (any, string, error) {
 			result, err := s.service.FinalizeSync(request.ClientID, params)
+			return result, "", err
+		}),
+		"finalize_sync_v2": newDispatchRoute(func(_ context.Context, request Request, params proto.FinalizeSyncV2Request) (any, string, error) {
+			result, err := s.service.FinalizeSyncV2(request.ClientID, params)
 			return result, "", err
 		}),
 		"fs_read": newDispatchRoute(func(ctx context.Context, request Request, params fsReadParams) (any, string, error) {

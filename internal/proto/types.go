@@ -210,6 +210,14 @@ type ProjectSessionResponse struct {
 	Snapshot ProjectSnapshot
 }
 
+type SyncCapabilities struct {
+	ProtocolVersion     uint32 `json:"protocol_version"`
+	ManifestBatch       bool   `json:"manifest_batch"`
+	DeleteBatch         bool   `json:"delete_batch"`
+	UploadBundle        bool   `json:"upload_bundle"`
+	PersistentHashCache bool   `json:"persistent_hash_cache"`
+}
+
 type ConfirmReconcileRequest struct {
 	ProjectID       string
 	ExpectedCursor  uint64
@@ -249,8 +257,28 @@ type BeginSyncRequest struct {
 	RootFingerprint string
 }
 
+type StartSyncSessionRequest struct {
+	SyncEpoch       uint64
+	AttemptID       uint64
+	RootFingerprint string
+}
+
+type StartSyncSessionResponse struct {
+	SessionID             string
+	SyncEpoch             uint64
+	ProtocolVersion       uint32
+	RemoteGeneration      uint64
+	RemoteManifestEntries uint64
+}
+
 type ScanManifestRequest struct {
 	Entries []ManifestEntry
+}
+
+type SyncManifestBatchRequest struct {
+	SessionID string
+	Entries   []ManifestEntry
+	Final     bool
 }
 
 type PlanManifestHashesResponse struct {
@@ -258,6 +286,16 @@ type PlanManifestHashesResponse struct {
 }
 
 type PlanSyncActionsResponse struct {
+	UploadPaths []string
+	DeletePaths []string
+}
+
+type PlanSyncV2Request struct {
+	SessionID string
+}
+
+type PlanSyncV2Response struct {
+	HashPaths   []string
 	UploadPaths []string
 	DeletePaths []string
 }
@@ -319,7 +357,43 @@ type DeletePathRequest struct {
 	Precondition MutationPrecondition
 }
 
+type DeletePathsBatchRequest struct {
+	SessionID string
+	SyncEpoch uint64
+	Paths     []string
+}
+
+type UploadBundleBeginRequest struct {
+	SessionID string
+	SyncEpoch uint64
+}
+
+type UploadBundleBeginResponse struct {
+	BundleID string
+}
+
+type UploadBundleFile struct {
+	Path            string
+	Metadata        FileMetadata
+	StatFingerprint string
+	ContentHash     string
+	Data            []byte
+}
+
+type UploadBundleCommitRequest struct {
+	SessionID string
+	BundleID  string
+	Files     []UploadBundleFile
+}
+
 type FinalizeSyncRequest struct {
+	SyncEpoch   uint64
+	AttemptID   uint64
+	GuardStable bool
+}
+
+type FinalizeSyncV2Request struct {
+	SessionID   string
 	SyncEpoch   uint64
 	AttemptID   uint64
 	GuardStable bool

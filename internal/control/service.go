@@ -40,15 +40,22 @@ type ProjectBootstrapper interface {
 
 type SyncBackend interface {
 	BeginSync(proto.ProjectKey, proto.BeginSyncRequest) error
+	StartSyncSession(proto.ProjectKey, proto.StartSyncSessionRequest) (proto.StartSyncSessionResponse, error)
 	ScanManifest(proto.ProjectKey, proto.ScanManifestRequest) error
+	SyncManifestBatch(proto.ProjectKey, proto.SyncManifestBatchRequest) error
 	PlanManifestHashes(proto.ProjectKey) (proto.PlanManifestHashesResponse, error)
 	PlanSyncActions(proto.ProjectKey) (proto.PlanSyncActionsResponse, error)
+	PlanSyncV2(proto.ProjectKey, proto.PlanSyncV2Request) (proto.PlanSyncV2Response, error)
 	BeginFile(proto.ProjectKey, proto.BeginFileRequest) (proto.BeginFileResponse, error)
 	ApplyChunk(proto.ProjectKey, proto.ApplyChunkRequest) error
 	CommitFile(proto.ProjectKey, proto.CommitFileRequest) error
 	AbortFile(proto.ProjectKey, proto.AbortFileRequest) error
 	DeletePath(proto.ProjectKey, proto.DeletePathRequest) error
+	DeletePathsBatch(proto.ProjectKey, proto.DeletePathsBatchRequest) error
+	UploadBundleBegin(proto.ProjectKey, proto.UploadBundleBeginRequest) (proto.UploadBundleBeginResponse, error)
+	UploadBundleCommit(proto.ProjectKey, proto.UploadBundleCommitRequest) error
 	FinalizeSync(proto.ProjectKey, proto.FinalizeSyncRequest) error
+	FinalizeSyncV2(proto.ProjectKey, proto.FinalizeSyncV2Request) error
 }
 
 type FilesystemBackend interface {
@@ -109,10 +116,11 @@ type CommandLaunch struct {
 }
 
 type HelloResponse struct {
-	ClientID  string
-	SessionID string
-	Username  string
-	ProjectID string
+	ClientID         string
+	SessionID        string
+	Username         string
+	ProjectID        string
+	SyncCapabilities proto.SyncCapabilities
 }
 
 func NewService(auth Authenticator) (*Service, error) {
@@ -209,4 +217,14 @@ func (s *Service) trace(format string, args ...any) {
 		return
 	}
 	s.tracef(format, args...)
+}
+
+func defaultSyncCapabilities() proto.SyncCapabilities {
+	return proto.SyncCapabilities{
+		ProtocolVersion:     2,
+		ManifestBatch:       true,
+		DeleteBatch:         true,
+		UploadBundle:        true,
+		PersistentHashCache: true,
+	}
 }

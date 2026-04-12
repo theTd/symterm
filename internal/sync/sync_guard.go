@@ -21,14 +21,15 @@ const (
 )
 
 type SyncGuard struct {
-	mu             sync.Mutex
-	root           string
-	dirtyEpoch     uint64
-	quiescentSince time.Time
-	watchHealthy   bool
-	failureReason  string
-	lastSnapshot   LocalWorkspaceSnapshot
-	localHashCache map[string]LocalWorkspaceFile
+	mu                  sync.Mutex
+	root                string
+	dirtyEpoch          uint64
+	quiescentSince      time.Time
+	watchHealthy        bool
+	failureReason       string
+	lastSnapshot        LocalWorkspaceSnapshot
+	localHashCache      map[string]LocalWorkspaceFile
+	persistentHashCache *PersistentHashCache
 }
 
 type SyncGuardAttempt struct {
@@ -47,6 +48,11 @@ func StartSyncGuard(
 		watchHealthy:   true,
 		lastSnapshot:   cloneLocalWorkspaceSnapshot(initial),
 		localHashCache: make(map[string]LocalWorkspaceFile),
+	}
+	if cache, err := loadPersistentHashCache(initial.WorkspaceInstanceID); err == nil {
+		guard.persistentHashCache = cache
+	} else if observer != nil {
+		observer.Operation("Persistent hash cache unavailable; continuing without it")
 	}
 	go guard.run(ctx, observer)
 	return guard
@@ -115,8 +121,10 @@ func (g *SyncGuard) HashPaths(snapshot LocalWorkspaceSnapshot, paths []string) (
 	g.mu.Lock()
 	for path, file := range hashed.HashedFiles {
 		g.localHashCache[path] = file
+		g.persistentHashCache.Store(file)
 	}
 	g.mu.Unlock()
+	_ = g.persistentHashCache.Save()
 	return hashed, nil
 }
 
@@ -254,7 +262,26 @@ func (g *SyncGuard) applyLocalHashCacheLocked(snapshot LocalWorkspaceSnapshot) L
 		prepared.Files[path] = current
 		prepared.HashedFiles[path] = current
 	}
+	for path, current := range prepared.Files {
+		if _, ok := prepared.HashedFiles[path]; ok {
+			continue
+		}
+		hashValue, ok := g.persistentHashCache.Lookup(current)
+		if !ok {
+			continue
+		}
+		current.Entry.ContentHash = hashValue
+		prepared.Files[path] = current
+		prepared.HashedFiles[path] = current
+	}
 	return prepared
+}
+
+func (g *SyncGuard) PersistentHashCacheStats() (uint64, uint64) {
+	if g == nil {
+		return 0, 0
+	}
+	return g.persistentHashCache.Stats()
 }
 
 func (g *SyncGuard) syncFsnotifyWatches(watcher *fsnotify.Watcher) {

@@ -161,6 +161,187 @@ func BenchmarkWorkspaceManagerInitialSyncScenarios(b *testing.B) {
 	}
 }
 
+func BenchmarkWorkspaceManagerInitialSyncScenariosV2(b *testing.B) {
+	type scenario struct {
+		name       string
+		prepare    func(*testing.B, string) ([]proto.ManifestEntry, map[string][]byte)
+		applyPlans bool
+	}
+
+	scenarios := []scenario{
+		{
+			name: "no-diff-large-workspace",
+			prepare: func(tb *testing.B, root string) ([]proto.ManifestEntry, map[string][]byte) {
+				return benchmarkSeedWorkspace(tb, root, 256, 1024, false)
+			},
+		},
+		{
+			name: "low-diff-large-workspace",
+			prepare: func(tb *testing.B, root string) ([]proto.ManifestEntry, map[string][]byte) {
+				entries, uploads := benchmarkSeedWorkspace(tb, root, 256, 1024, false)
+				entries[0].ContentHash = sha256Hex([]byte("changed-file-000"))
+				entries[0].Metadata.Size = int64(len("changed-file-000"))
+				entries[0].Metadata.MTime = time.Unix(1_700_001_100, 0).UTC()
+				entries[0].StatFingerprint = "changed-000"
+				uploads[entries[0].Path] = []byte("changed-file-000")
+				return entries, uploads
+			},
+			applyPlans: true,
+		},
+		{
+			name: "delete-only",
+			prepare: func(tb *testing.B, root string) ([]proto.ManifestEntry, map[string][]byte) {
+				entries, _ := benchmarkSeedWorkspace(tb, root, 64, 512, false)
+				for idx := 0; idx < 8; idx++ {
+					path := filepath.Join(root, "extra", benchmarkFileName(idx))
+					if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+						tb.Fatalf("MkdirAll(extra) error = %v", err)
+					}
+					if err := os.WriteFile(path, []byte("extra"), 0o644); err != nil {
+						tb.Fatalf("WriteFile(extra) error = %v", err)
+					}
+				}
+				return entries, map[string][]byte{}
+			},
+			applyPlans: true,
+		},
+		{
+			name: "many-small-files",
+			prepare: func(tb *testing.B, root string) ([]proto.ManifestEntry, map[string][]byte) {
+				return benchmarkPrepareUploads(tb, 512, 128)
+			},
+			applyPlans: true,
+		},
+		{
+			name: "few-large-files",
+			prepare: func(tb *testing.B, root string) ([]proto.ManifestEntry, map[string][]byte) {
+				return benchmarkPrepareUploads(tb, 4, 2*1024*1024)
+			},
+			applyPlans: true,
+		},
+	}
+
+	for _, scenario := range scenarios {
+		scenario := scenario
+		b.Run(scenario.name, func(b *testing.B) {
+			key := proto.ProjectKey{Username: "alice", ProjectID: "demo"}
+			b.ResetTimer()
+			for idx := 0; idx < b.N; idx++ {
+				projectsRoot := b.TempDir()
+				manager := NewWorkspaceManager(projectsRoot)
+				layout, err := ResolveProjectLayout(projectsRoot, key)
+				if err != nil {
+					b.Fatalf("ResolveProjectLayout() error = %v", err)
+				}
+				if err := layout.EnsureDirectories(); err != nil {
+					b.Fatalf("EnsureDirectories() error = %v", err)
+				}
+
+				entries, uploads := scenario.prepare(b, layout.WorkspaceDir)
+				started, err := manager.StartSyncSession(key, proto.StartSyncSessionRequest{
+					SyncEpoch:       uint64(idx + 1),
+					AttemptID:       1,
+					RootFingerprint: "benchmark-root",
+				})
+				if err != nil {
+					b.Fatalf("StartSyncSession() error = %v", err)
+				}
+				if err := manager.SyncManifestBatch(key, proto.SyncManifestBatchRequest{
+					SessionID: started.SessionID,
+					Entries:   entries,
+					Final:     true,
+				}); err != nil {
+					b.Fatalf("SyncManifestBatch() error = %v", err)
+				}
+				plan, err := manager.PlanSyncV2(key, proto.PlanSyncV2Request{SessionID: started.SessionID})
+				if err != nil {
+					b.Fatalf("PlanSyncV2() error = %v", err)
+				}
+				if len(plan.HashPaths) != 0 {
+					b.Fatalf("PlanSyncV2() returned unexpected hash paths: %#v", plan.HashPaths)
+				}
+				if scenario.applyPlans {
+					if len(plan.DeletePaths) > 0 {
+						if err := manager.DeletePathsBatch(key, proto.DeletePathsBatchRequest{
+							SessionID: started.SessionID,
+							SyncEpoch: uint64(idx + 1),
+							Paths:     plan.DeletePaths,
+						}); err != nil {
+							b.Fatalf("DeletePathsBatch() error = %v", err)
+						}
+					}
+					var bundleFiles []proto.UploadBundleFile
+					for _, path := range plan.UploadPaths {
+						content := uploads[path]
+						entry := benchmarkEntryByPath(entries, path)
+						if len(content) <= 256*1024 {
+							bundleFiles = append(bundleFiles, proto.UploadBundleFile{
+								Path:            path,
+								Metadata:        entry.Metadata,
+								StatFingerprint: entry.StatFingerprint,
+								ContentHash:     entry.ContentHash,
+								Data:            content,
+							})
+							continue
+						}
+						startedFile, err := manager.BeginFile(key, proto.BeginFileRequest{
+							SyncEpoch:       uint64(idx + 1),
+							Path:            path,
+							Metadata:        entry.Metadata,
+							ExpectedSize:    entry.Metadata.Size,
+							StatFingerprint: entry.StatFingerprint,
+						})
+						if err != nil {
+							b.Fatalf("BeginFile(%s) error = %v", path, err)
+						}
+						if err := manager.ApplyChunk(key, proto.ApplyChunkRequest{
+							FileID: startedFile.FileID,
+							Offset: 0,
+							Data:   content,
+						}); err != nil {
+							b.Fatalf("ApplyChunk(%s) error = %v", path, err)
+						}
+						if err := manager.CommitFile(key, proto.CommitFileRequest{
+							FileID:          startedFile.FileID,
+							FinalHash:       entry.ContentHash,
+							FinalSize:       entry.Metadata.Size,
+							MTime:           entry.Metadata.MTime,
+							Mode:            entry.Metadata.Mode,
+							StatFingerprint: entry.StatFingerprint,
+						}); err != nil {
+							b.Fatalf("CommitFile(%s) error = %v", path, err)
+						}
+					}
+					if len(bundleFiles) > 0 {
+						bundle, err := manager.UploadBundleBegin(key, proto.UploadBundleBeginRequest{
+							SessionID: started.SessionID,
+							SyncEpoch: uint64(idx + 1),
+						})
+						if err != nil {
+							b.Fatalf("UploadBundleBegin() error = %v", err)
+						}
+						if err := manager.UploadBundleCommit(key, proto.UploadBundleCommitRequest{
+							SessionID: started.SessionID,
+							BundleID:  bundle.BundleID,
+							Files:     bundleFiles,
+						}); err != nil {
+							b.Fatalf("UploadBundleCommit() error = %v", err)
+						}
+					}
+				}
+				if err := manager.FinalizeSyncV2(key, proto.FinalizeSyncV2Request{
+					SessionID:   started.SessionID,
+					SyncEpoch:   uint64(idx + 1),
+					AttemptID:   1,
+					GuardStable: true,
+				}); err != nil {
+					b.Fatalf("FinalizeSyncV2() error = %v", err)
+				}
+			}
+		})
+	}
+}
+
 func benchmarkSeedWorkspace(tb *testing.B, workspaceRoot string, count int, size int, nested bool) ([]proto.ManifestEntry, map[string][]byte) {
 	tb.Helper()
 	entries := make([]proto.ManifestEntry, 0, count)

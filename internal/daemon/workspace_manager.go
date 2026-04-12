@@ -51,6 +51,8 @@ type workspaceCommittedState struct {
 	dirGen         map[string]uint64
 	objectIdentity map[string]string
 	nextObjectID   uint64
+	manifest       map[string]proto.ManifestEntry
+	generation     uint64
 }
 
 type workspaceSyncState struct {
@@ -241,6 +243,7 @@ func (m *WorkspaceManager) stateLocked(projectKey proto.ProjectKey) *workspaceSt
 				objectGen:      make(map[string]uint64),
 				dirGen:         make(map[string]uint64),
 				objectIdentity: make(map[string]string),
+				manifest:       make(map[string]proto.ManifestEntry),
 			},
 			sync: workspaceSyncState{
 				sessions: make(map[uint64]*syncSession),
@@ -363,6 +366,8 @@ func (s *workspaceState) bumpRenameGenerationsLocked(path string, newPath string
 }
 
 func (s *workspaceState) syncManifestStateLocked(entries map[string]proto.ManifestEntry) {
+	s.committed.manifest = cloneManifestMap(entries)
+	s.committed.generation++
 	keep := make(map[string]struct{}, len(entries))
 	for path := range entries {
 		keep[path] = struct{}{}

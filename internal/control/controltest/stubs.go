@@ -38,16 +38,30 @@ type RuntimeBackendStub struct {
 }
 
 type SyncBackendStub struct {
+	StartSyncSessionFunc   func(proto.ProjectKey, proto.StartSyncSessionRequest) (proto.StartSyncSessionResponse, error)
 	BeginSyncFunc          func(proto.ProjectKey, proto.BeginSyncRequest) error
 	ScanManifestFunc       func(proto.ProjectKey, proto.ScanManifestRequest) error
+	SyncManifestBatchFunc  func(proto.ProjectKey, proto.SyncManifestBatchRequest) error
 	PlanManifestHashesFunc func(proto.ProjectKey) (proto.PlanManifestHashesResponse, error)
 	PlanSyncActionsFunc    func(proto.ProjectKey) (proto.PlanSyncActionsResponse, error)
+	PlanSyncV2Func         func(proto.ProjectKey, proto.PlanSyncV2Request) (proto.PlanSyncV2Response, error)
 	BeginFileFunc          func(proto.ProjectKey, proto.BeginFileRequest) (proto.BeginFileResponse, error)
 	ApplyChunkFunc         func(proto.ProjectKey, proto.ApplyChunkRequest) error
 	CommitFileFunc         func(proto.ProjectKey, proto.CommitFileRequest) error
 	AbortFileFunc          func(proto.ProjectKey, proto.AbortFileRequest) error
 	DeletePathFunc         func(proto.ProjectKey, proto.DeletePathRequest) error
+	DeletePathsBatchFunc   func(proto.ProjectKey, proto.DeletePathsBatchRequest) error
+	UploadBundleBeginFunc  func(proto.ProjectKey, proto.UploadBundleBeginRequest) (proto.UploadBundleBeginResponse, error)
+	UploadBundleCommitFunc func(proto.ProjectKey, proto.UploadBundleCommitRequest) error
 	FinalizeSyncFunc       func(proto.ProjectKey, proto.FinalizeSyncRequest) error
+	FinalizeSyncV2Func     func(proto.ProjectKey, proto.FinalizeSyncV2Request) error
+}
+
+func (s SyncBackendStub) StartSyncSession(key proto.ProjectKey, request proto.StartSyncSessionRequest) (proto.StartSyncSessionResponse, error) {
+	if s.StartSyncSessionFunc == nil {
+		return proto.StartSyncSessionResponse{}, proto.NewError(proto.ErrProjectNotReady, "sync backend is unavailable")
+	}
+	return s.StartSyncSessionFunc(key, request)
 }
 
 func (s SyncBackendStub) BeginSync(key proto.ProjectKey, request proto.BeginSyncRequest) error {
@@ -64,6 +78,13 @@ func (s SyncBackendStub) ScanManifest(key proto.ProjectKey, request proto.ScanMa
 	return s.ScanManifestFunc(key, request)
 }
 
+func (s SyncBackendStub) SyncManifestBatch(key proto.ProjectKey, request proto.SyncManifestBatchRequest) error {
+	if s.SyncManifestBatchFunc == nil {
+		return proto.NewError(proto.ErrProjectNotReady, "sync backend is unavailable")
+	}
+	return s.SyncManifestBatchFunc(key, request)
+}
+
 func (s SyncBackendStub) PlanManifestHashes(key proto.ProjectKey) (proto.PlanManifestHashesResponse, error) {
 	if s.PlanManifestHashesFunc == nil {
 		return proto.PlanManifestHashesResponse{}, proto.NewError(proto.ErrProjectNotReady, "sync backend is unavailable")
@@ -76,6 +97,13 @@ func (s SyncBackendStub) PlanSyncActions(key proto.ProjectKey) (proto.PlanSyncAc
 		return proto.PlanSyncActionsResponse{}, proto.NewError(proto.ErrProjectNotReady, "sync backend is unavailable")
 	}
 	return s.PlanSyncActionsFunc(key)
+}
+
+func (s SyncBackendStub) PlanSyncV2(key proto.ProjectKey, request proto.PlanSyncV2Request) (proto.PlanSyncV2Response, error) {
+	if s.PlanSyncV2Func == nil {
+		return proto.PlanSyncV2Response{}, proto.NewError(proto.ErrProjectNotReady, "sync backend is unavailable")
+	}
+	return s.PlanSyncV2Func(key, request)
 }
 
 func (s SyncBackendStub) BeginFile(key proto.ProjectKey, request proto.BeginFileRequest) (proto.BeginFileResponse, error) {
@@ -113,11 +141,39 @@ func (s SyncBackendStub) DeletePath(key proto.ProjectKey, request proto.DeletePa
 	return s.DeletePathFunc(key, request)
 }
 
+func (s SyncBackendStub) DeletePathsBatch(key proto.ProjectKey, request proto.DeletePathsBatchRequest) error {
+	if s.DeletePathsBatchFunc == nil {
+		return proto.NewError(proto.ErrProjectNotReady, "sync backend is unavailable")
+	}
+	return s.DeletePathsBatchFunc(key, request)
+}
+
+func (s SyncBackendStub) UploadBundleBegin(key proto.ProjectKey, request proto.UploadBundleBeginRequest) (proto.UploadBundleBeginResponse, error) {
+	if s.UploadBundleBeginFunc == nil {
+		return proto.UploadBundleBeginResponse{}, proto.NewError(proto.ErrProjectNotReady, "sync backend is unavailable")
+	}
+	return s.UploadBundleBeginFunc(key, request)
+}
+
+func (s SyncBackendStub) UploadBundleCommit(key proto.ProjectKey, request proto.UploadBundleCommitRequest) error {
+	if s.UploadBundleCommitFunc == nil {
+		return proto.NewError(proto.ErrProjectNotReady, "sync backend is unavailable")
+	}
+	return s.UploadBundleCommitFunc(key, request)
+}
+
 func (s SyncBackendStub) FinalizeSync(key proto.ProjectKey, request proto.FinalizeSyncRequest) error {
 	if s.FinalizeSyncFunc == nil {
 		return proto.NewError(proto.ErrProjectNotReady, "sync backend is unavailable")
 	}
 	return s.FinalizeSyncFunc(key, request)
+}
+
+func (s SyncBackendStub) FinalizeSyncV2(key proto.ProjectKey, request proto.FinalizeSyncV2Request) error {
+	if s.FinalizeSyncV2Func == nil {
+		return proto.NewError(proto.ErrProjectNotReady, "sync backend is unavailable")
+	}
+	return s.FinalizeSyncV2Func(key, request)
 }
 
 type FilesystemBackendStub struct {

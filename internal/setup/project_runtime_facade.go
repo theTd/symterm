@@ -62,8 +62,16 @@ func (f *ProjectRuntimeFacade) BeginSync(key proto.ProjectKey, request proto.Beg
 	return f.workspace.BeginSync(key, request)
 }
 
+func (f *ProjectRuntimeFacade) StartSyncSession(key proto.ProjectKey, request proto.StartSyncSessionRequest) (proto.StartSyncSessionResponse, error) {
+	return f.workspace.StartSyncSession(key, request)
+}
+
 func (f *ProjectRuntimeFacade) ScanManifest(key proto.ProjectKey, request proto.ScanManifestRequest) error {
 	return f.workspace.ScanManifest(key, request)
+}
+
+func (f *ProjectRuntimeFacade) SyncManifestBatch(key proto.ProjectKey, request proto.SyncManifestBatchRequest) error {
+	return f.workspace.SyncManifestBatch(key, request)
 }
 
 func (f *ProjectRuntimeFacade) PlanManifestHashes(key proto.ProjectKey) (proto.PlanManifestHashesResponse, error) {
@@ -72,6 +80,10 @@ func (f *ProjectRuntimeFacade) PlanManifestHashes(key proto.ProjectKey) (proto.P
 
 func (f *ProjectRuntimeFacade) PlanSyncActions(key proto.ProjectKey) (proto.PlanSyncActionsResponse, error) {
 	return f.workspace.PlanSyncActions(key)
+}
+
+func (f *ProjectRuntimeFacade) PlanSyncV2(key proto.ProjectKey, request proto.PlanSyncV2Request) (proto.PlanSyncV2Response, error) {
+	return f.workspace.PlanSyncV2(key, request)
 }
 
 func (f *ProjectRuntimeFacade) BeginFile(key proto.ProjectKey, request proto.BeginFileRequest) (proto.BeginFileResponse, error) {
@@ -94,8 +106,24 @@ func (f *ProjectRuntimeFacade) DeletePath(key proto.ProjectKey, request proto.De
 	return f.workspace.DeletePath(key, request)
 }
 
+func (f *ProjectRuntimeFacade) DeletePathsBatch(key proto.ProjectKey, request proto.DeletePathsBatchRequest) error {
+	return f.workspace.DeletePathsBatch(key, request)
+}
+
+func (f *ProjectRuntimeFacade) UploadBundleBegin(key proto.ProjectKey, request proto.UploadBundleBeginRequest) (proto.UploadBundleBeginResponse, error) {
+	return f.workspace.UploadBundleBegin(key, request)
+}
+
+func (f *ProjectRuntimeFacade) UploadBundleCommit(key proto.ProjectKey, request proto.UploadBundleCommitRequest) error {
+	return f.workspace.UploadBundleCommit(key, request)
+}
+
 func (f *ProjectRuntimeFacade) FinalizeSync(key proto.ProjectKey, request proto.FinalizeSyncRequest) error {
 	return f.workspace.FinalizeSync(key, request)
+}
+
+func (f *ProjectRuntimeFacade) FinalizeSyncV2(key proto.ProjectKey, request proto.FinalizeSyncV2Request) error {
+	return f.workspace.FinalizeSyncV2(key, request)
 }
 
 func (f *ProjectRuntimeFacade) FsRead(key proto.ProjectKey, op proto.FsOperation, request proto.FsRequest) (proto.FsReply, error) {

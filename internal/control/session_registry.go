@@ -113,10 +113,11 @@ func (r *SessionRegistry) HelloPrincipal(principal AuthenticatedPrincipal, reque
 	delete(r.closed, sessionID)
 
 	return HelloResponse{
-		ClientID:  clientID,
-		SessionID: sessionID,
-		Username:  principal.Username,
-		ProjectID: request.ProjectID,
+		ClientID:         clientID,
+		SessionID:        sessionID,
+		Username:         principal.Username,
+		ProjectID:        request.ProjectID,
+		SyncCapabilities: defaultSyncCapabilities(),
 	}
 }
 

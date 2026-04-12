@@ -8,8 +8,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"symterm/internal/portablefs"
@@ -17,14 +19,15 @@ import (
 )
 
 type LocalWorkspaceSnapshot struct {
-	Root               string
-	Fingerprint        string
-	ContentFingerprint string
-	Digest             proto.WorkspaceDigest
-	Files              map[string]LocalWorkspaceFile
-	HashedFiles        map[string]LocalWorkspaceFile
-	Dirs               map[string]proto.ManifestEntry
-	Entries            []proto.ManifestEntry
+	WorkspaceInstanceID string
+	Root                string
+	Fingerprint         string
+	ContentFingerprint  string
+	Digest              proto.WorkspaceDigest
+	Files               map[string]LocalWorkspaceFile
+	HashedFiles         map[string]LocalWorkspaceFile
+	Dirs                map[string]proto.ManifestEntry
+	Entries             []proto.ManifestEntry
 }
 
 type LocalWorkspaceFile struct {
@@ -220,6 +223,7 @@ func hashWorkspaceSnapshot(snapshot LocalWorkspaceSnapshot, selected map[string]
 		updatedEntries[path] = entry
 	}
 
+	hashTargets := make([]LocalWorkspaceFile, 0, len(result.Files))
 	for path, localFile := range result.Files {
 		shouldHash := hashAll
 		if !shouldHash && selected != nil {
@@ -238,15 +242,17 @@ func hashWorkspaceSnapshot(snapshot LocalWorkspaceSnapshot, selected map[string]
 				continue
 			}
 		}
+		hashTargets = append(hashTargets, localFile)
+	}
 
-		hashValue, err := hashLocalFileFn(localFile.Abs)
-		if err != nil {
-			return LocalWorkspaceSnapshot{}, err
-		}
-		localFile.Entry.ContentHash = hashValue
-		result.Files[path] = localFile
-		result.HashedFiles[path] = localFile
-		updatedEntries[path] = localFile.Entry
+	hashedFiles, err := hashWorkspaceFilesParallel(hashTargets)
+	if err != nil {
+		return LocalWorkspaceSnapshot{}, err
+	}
+	for _, localFile := range hashedFiles {
+		result.Files[localFile.Path] = localFile
+		result.HashedFiles[localFile.Path] = localFile
+		updatedEntries[localFile.Path] = localFile.Entry
 	}
 
 	result.Entries = make([]proto.ManifestEntry, 0, len(updatedEntries))
@@ -263,16 +269,75 @@ func hashWorkspaceSnapshot(snapshot LocalWorkspaceSnapshot, selected map[string]
 	return result, nil
 }
 
+func hashWorkspaceFilesParallel(files []LocalWorkspaceFile) ([]LocalWorkspaceFile, error) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+	workerCount := runtime.NumCPU()
+	if workerCount < 2 {
+		workerCount = 2
+	}
+	if workerCount > 8 {
+		workerCount = 8
+	}
+	if workerCount > len(files) {
+		workerCount = len(files)
+	}
+
+	results := make([]LocalWorkspaceFile, len(files))
+	indexCh := make(chan int, len(files))
+	errCh := make(chan error, 1)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workerCount; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range indexCh {
+				localFile := files[idx]
+				hashValue, err := hashLocalFileFn(localFile.Abs)
+				if err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				localFile.Entry.ContentHash = hashValue
+				results[idx] = localFile
+			}
+		}()
+	}
+	for idx := range files {
+		select {
+		case err := <-errCh:
+			close(indexCh)
+			wg.Wait()
+			return nil, err
+		default:
+		}
+		indexCh <- idx
+	}
+	close(indexCh)
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return nil, err
+	default:
+	}
+	return results, nil
+}
+
 func cloneLocalWorkspaceSnapshot(snapshot LocalWorkspaceSnapshot) LocalWorkspaceSnapshot {
 	cloned := LocalWorkspaceSnapshot{
-		Root:               snapshot.Root,
-		Fingerprint:        snapshot.Fingerprint,
-		ContentFingerprint: snapshot.ContentFingerprint,
-		Digest:             snapshot.Digest,
-		Files:              make(map[string]LocalWorkspaceFile, len(snapshot.Files)),
-		HashedFiles:        make(map[string]LocalWorkspaceFile, len(snapshot.HashedFiles)),
-		Dirs:               make(map[string]proto.ManifestEntry, len(snapshot.Dirs)),
-		Entries:            append([]proto.ManifestEntry(nil), snapshot.Entries...),
+		WorkspaceInstanceID: snapshot.WorkspaceInstanceID,
+		Root:                snapshot.Root,
+		Fingerprint:         snapshot.Fingerprint,
+		ContentFingerprint:  snapshot.ContentFingerprint,
+		Digest:              snapshot.Digest,
+		Files:               make(map[string]LocalWorkspaceFile, len(snapshot.Files)),
+		HashedFiles:         make(map[string]LocalWorkspaceFile, len(snapshot.HashedFiles)),
+		Dirs:                make(map[string]proto.ManifestEntry, len(snapshot.Dirs)),
+		Entries:             append([]proto.ManifestEntry(nil), snapshot.Entries...),
 	}
 	for path, file := range snapshot.Files {
 		cloned.Files[path] = file

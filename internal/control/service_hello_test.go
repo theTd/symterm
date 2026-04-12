@@ -45,6 +45,12 @@ func TestHelloAuthenticatedCreatesSessionWithoutSecondTokenCheck(t *testing.T) {
 	if response.ClientID == "" || response.SessionID == "" {
 		t.Fatalf("HelloAuthenticated() = %#v", response)
 	}
+	if response.SyncCapabilities.ProtocolVersion != 2 {
+		t.Fatalf("HelloAuthenticated() sync protocol = %d, want 2", response.SyncCapabilities.ProtocolVersion)
+	}
+	if !response.SyncCapabilities.ManifestBatch || !response.SyncCapabilities.DeleteBatch || !response.SyncCapabilities.UploadBundle || !response.SyncCapabilities.PersistentHashCache {
+		t.Fatalf("HelloAuthenticated() sync capabilities = %#v, want all v2 capabilities enabled", response.SyncCapabilities)
+	}
 }
 
 func TestHelloAuthenticatedRejectsUnknownSessionKind(t *testing.T) {

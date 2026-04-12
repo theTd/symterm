@@ -48,12 +48,44 @@ func (s *Service) BeginSync(clientID string, request proto.BeginSyncRequest) err
 	}, request.SyncEpoch, s.now())
 }
 
+func (s *Service) StartSyncSession(clientID string, request proto.StartSyncSessionRequest) (proto.StartSyncSessionResponse, error) {
+	backend, ctx, err := resolveSyncInvocation(s, clientID, request.SyncEpoch)
+	if err != nil {
+		return proto.StartSyncSessionResponse{}, err
+	}
+	response, err := backend.StartSyncSession(ctx.projectKey, request)
+	if err != nil {
+		s.projects.FailInitialSync(s.sessions, s.runtime, s.commands, s.uploads, s.invalidates, ctx.projectKey, ctx.instance, err, s.now, s.reportCleanup)
+		return proto.StartSyncSessionResponse{}, err
+	}
+	if err := ctx.instance.ReportSyncProgress(clientID, proto.SyncProgress{
+		Phase:     proto.SyncProgressPhaseBegin,
+		Completed: 1,
+		Total:     1,
+	}, request.SyncEpoch, s.now()); err != nil {
+		return proto.StartSyncSessionResponse{}, err
+	}
+	return response, nil
+}
+
 func (s *Service) ScanManifest(clientID string, request proto.ScanManifestRequest) error {
 	backend, ctx, err := resolveSyncInvocation(s, clientID, 0)
 	if err != nil {
 		return err
 	}
 	if err := backend.ScanManifest(ctx.projectKey, request); err != nil {
+		s.projects.FailInitialSync(s.sessions, s.runtime, s.commands, s.uploads, s.invalidates, ctx.projectKey, ctx.instance, err, s.now, s.reportCleanup)
+		return err
+	}
+	return nil
+}
+
+func (s *Service) SyncManifestBatch(clientID string, request proto.SyncManifestBatchRequest) error {
+	backend, ctx, err := resolveSyncInvocation(s, clientID, 0)
+	if err != nil {
+		return err
+	}
+	if err := backend.SyncManifestBatch(ctx.projectKey, request); err != nil {
 		s.projects.FailInitialSync(s.sessions, s.runtime, s.commands, s.uploads, s.invalidates, ctx.projectKey, ctx.instance, err, s.now, s.reportCleanup)
 		return err
 	}
@@ -82,6 +114,19 @@ func (s *Service) PlanSyncActions(clientID string) (proto.PlanSyncActionsRespons
 	if err != nil {
 		s.projects.FailInitialSync(s.sessions, s.runtime, s.commands, s.uploads, s.invalidates, ctx.projectKey, ctx.instance, err, s.now, s.reportCleanup)
 		return proto.PlanSyncActionsResponse{}, err
+	}
+	return response, nil
+}
+
+func (s *Service) PlanSyncV2(clientID string, request proto.PlanSyncV2Request) (proto.PlanSyncV2Response, error) {
+	backend, ctx, err := resolveSyncInvocation(s, clientID, 0)
+	if err != nil {
+		return proto.PlanSyncV2Response{}, err
+	}
+	response, err := backend.PlanSyncV2(ctx.projectKey, request)
+	if err != nil {
+		s.projects.FailInitialSync(s.sessions, s.runtime, s.commands, s.uploads, s.invalidates, ctx.projectKey, ctx.instance, err, s.now, s.reportCleanup)
+		return proto.PlanSyncV2Response{}, err
 	}
 	return response, nil
 }
@@ -151,12 +196,81 @@ func (s *Service) DeletePath(clientID string, request proto.DeletePathRequest) e
 	return s.invalidates.Append(ctx.projectKey, invalidation.DeletePath(request.Path))
 }
 
+func (s *Service) DeletePathsBatch(clientID string, request proto.DeletePathsBatchRequest) error {
+	backend, ctx, err := resolveSyncInvocation(s, clientID, request.SyncEpoch)
+	if err != nil {
+		return err
+	}
+	if err := backend.DeletePathsBatch(ctx.projectKey, request); err != nil {
+		s.projects.FailInitialSync(s.sessions, s.runtime, s.commands, s.uploads, s.invalidates, ctx.projectKey, ctx.instance, err, s.now, s.reportCleanup)
+		return err
+	}
+	var changes []proto.InvalidateChange
+	for _, path := range request.Paths {
+		changes = invalidation.AppendChanges(changes, invalidation.DeletePath(path)...)
+	}
+	return s.invalidates.Append(ctx.projectKey, changes)
+}
+
+func (s *Service) UploadBundleBegin(clientID string, request proto.UploadBundleBeginRequest) (proto.UploadBundleBeginResponse, error) {
+	backend, ctx, err := resolveSyncInvocation(s, clientID, request.SyncEpoch)
+	if err != nil {
+		return proto.UploadBundleBeginResponse{}, err
+	}
+	response, err := backend.UploadBundleBegin(ctx.projectKey, request)
+	if err != nil {
+		s.projects.FailInitialSync(s.sessions, s.runtime, s.commands, s.uploads, s.invalidates, ctx.projectKey, ctx.instance, err, s.now, s.reportCleanup)
+		return proto.UploadBundleBeginResponse{}, err
+	}
+	return response, nil
+}
+
+func (s *Service) UploadBundleCommit(clientID string, request proto.UploadBundleCommitRequest) error {
+	backend, ctx, err := resolveSyncInvocation(s, clientID, 0)
+	if err != nil {
+		return err
+	}
+	if err := backend.UploadBundleCommit(ctx.projectKey, request); err != nil {
+		s.projects.FailInitialSync(s.sessions, s.runtime, s.commands, s.uploads, s.invalidates, ctx.projectKey, ctx.instance, err, s.now, s.reportCleanup)
+		return err
+	}
+	var changes []proto.InvalidateChange
+	for _, file := range request.Files {
+		changes = invalidation.AppendChanges(changes, invalidation.DataPath(file.Path)...)
+	}
+	return s.invalidates.Append(ctx.projectKey, changes)
+}
+
 func (s *Service) FinalizeSync(clientID string, request proto.FinalizeSyncRequest) (proto.ProjectSnapshot, error) {
 	backend, ctx, err := resolveSyncInvocation(s, clientID, request.SyncEpoch)
 	if err != nil {
 		return proto.ProjectSnapshot{}, err
 	}
 	if err := backend.FinalizeSync(ctx.projectKey, request); err != nil {
+		s.projects.FailInitialSync(s.sessions, s.runtime, s.commands, s.uploads, s.invalidates, ctx.projectKey, ctx.instance, err, s.now, s.reportCleanup)
+		return proto.ProjectSnapshot{}, err
+	}
+	if err := ctx.instance.ReportSyncProgress(clientID, proto.SyncProgress{
+		Phase:     proto.SyncProgressPhaseFinalize,
+		Completed: 1,
+		Total:     1,
+	}, request.SyncEpoch, s.now()); err != nil {
+		return proto.ProjectSnapshot{}, err
+	}
+	snapshot, err := ctx.instance.CompleteInitialSync(clientID, request.SyncEpoch, s.now())
+	if err != nil {
+		return proto.ProjectSnapshot{}, err
+	}
+	s.publishProjectSessions(ctx.projectKey)
+	return snapshot, nil
+}
+
+func (s *Service) FinalizeSyncV2(clientID string, request proto.FinalizeSyncV2Request) (proto.ProjectSnapshot, error) {
+	backend, ctx, err := resolveSyncInvocation(s, clientID, request.SyncEpoch)
+	if err != nil {
+		return proto.ProjectSnapshot{}, err
+	}
+	if err := backend.FinalizeSyncV2(ctx.projectKey, request); err != nil {
 		s.projects.FailInitialSync(s.sessions, s.runtime, s.commands, s.uploads, s.invalidates, ctx.projectKey, ctx.instance, err, s.now, s.reportCleanup)
 		return proto.ProjectSnapshot{}, err
 	}
