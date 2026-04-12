@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: -trimpath
+
+jobs:
+  test-and-build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Show Go version
+        run: go version
+
+      - name: Resolve build version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            latest_tag="$(git tag --list 'v*' --sort=-version:refname | head -n 1)"
+            if [ -z "$latest_tag" ]; then
+              next_tag="v0.1.0"
+            else
+              version_core="${latest_tag#v}"
+              IFS='.' read -r major minor patch <<<"$version_core"
+              : "${major:?missing major}"
+              : "${minor:?missing minor}"
+              : "${patch:?missing patch}"
+              next_tag="v${major}.${minor}.$((patch + 1))"
+            fi
+            version="${next_tag}-ci.${GITHUB_SHA::7}"
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+          echo "Resolved build version: $version"
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          files="$(git ls-files '*.go')"
+          if [ -z "$files" ]; then
+            exit 0
+          fi
+          unformatted="$(gofmt -l $files)"
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted Go files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Prepare artifact directory
+        shell: bash
+        run: mkdir -p dist/${{ runner.os }}
+
+      - name: Build symterm
+        shell: bash
+        run: |
+          set -euo pipefail
+          ext=""
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ext=".exe"
+          fi
+          go build -ldflags="-X 'symterm/internal/buildinfo.Version=${{ steps.version.outputs.value }}'" -o "dist/${{ runner.os }}/symterm${ext}" ./cmd/symterm
+
+      - name: Build symtermd
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+        run: go build -ldflags="-X 'symterm/internal/buildinfo.Version=${{ steps.version.outputs.value }}'" -o "dist/${{ runner.os }}/symtermd" ./cmd/symtermd
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: symterm-${{ runner.os }}-${{ steps.version.outputs.value }}
+          path: dist/${{ runner.os }}/
+          if-no-files-found: error
+          retention-days: 14
