@@ -30,15 +30,24 @@ PURGE_DATA=0
 PROJECTS_ROOT_TO_PURGE=""
 CLIENT_CHOICE_SET=0
 PURGE_CHOICE_SET=0
+ASSUME_YES=0
+
+has_prompt_terminal() {
+  [ -r /dev/tty ] && [ -w /dev/tty ] || return 1
+  : </dev/tty >/dev/tty 2>/dev/null
+}
 
 usage() {
   cat <<EOF
-Usage: ./tools/uninstall-symterm.sh [--daemon-only] [--client-only] [--all] [--purge-data] [--keep-data] [--remove-client] [--keep-client]
+Usage: ./tools/uninstall-symterm.sh [--yes] [--daemon-only] [--client-only] [--all] [--purge-data] [--keep-data] [--remove-client] [--keep-client]
 
 Uninstalls symtermd by default. Unless you pass explicit flags, the script asks
 whether to also remove the symterm client and whether to purge daemon user data.
+Unless you pass --yes, the script also asks for final confirmation before making
+changes.
 
 Options:
+  --yes            Skip the final confirmation prompt.
   --daemon-only    Remove only symtermd and keep the client.
   --client-only    Remove only the symterm client binary and command link.
   --all            Remove both symterm and symtermd.
@@ -53,6 +62,9 @@ EOF
 parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      -y|--yes)
+        ASSUME_YES=1
+        ;;
       --daemon-only)
         REMOVE_DAEMON=1
         REMOVE_CLIENT=0
@@ -99,12 +111,17 @@ parse_args() {
 }
 
 is_interactive_terminal() {
-  [ -t 0 ] && [ -t 1 ]
+  has_prompt_terminal
 }
 
 prompt_yes_no_default() {
   label="$1"
   default_answer="$2"
+
+  if ! has_prompt_terminal; then
+    echo "no interactive terminal is available for prompts" >&2
+    exit 1
+  fi
 
   case "$default_answer" in
     y|Y)
@@ -116,8 +133,8 @@ prompt_yes_no_default() {
   esac
 
   while true; do
-    printf '%s' "$prompt" >&2
-    IFS= read -r answer || true
+    printf '%s' "$prompt" >/dev/tty
+    IFS= read -r answer </dev/tty || true
     case "$answer" in
       '')
         case "$default_answer" in
@@ -164,16 +181,52 @@ apply_interactive_choices() {
   fi
 
   if [ "$REMOVE_DAEMON" -eq 1 ] && [ "$CLIENT_CHOICE_SET" -eq 0 ]; then
-    echo "non-interactive shell detected; keeping the symterm client (use --remove-client to override)"
+    echo "no interactive terminal is available; keeping the symterm client (use --remove-client to override)"
   fi
   if [ "$REMOVE_DAEMON" -eq 1 ] && [ "$PURGE_CHOICE_SET" -eq 0 ]; then
-    echo "non-interactive shell detected; preserving daemon user data (use --purge-data to override)"
+    echo "no interactive terminal is available; preserving daemon user data (use --purge-data to override)"
   fi
 }
 
 validate_args() {
   if [ "$REMOVE_DAEMON" -eq 0 ] && [ "$PURGE_DATA" -eq 1 ]; then
     echo "--purge-data requires daemon removal" >&2
+    exit 1
+  fi
+}
+
+print_plan() {
+  if [ "$REMOVE_DAEMON" -eq 1 ]; then
+    echo "daemon removal: yes"
+  else
+    echo "daemon removal: no"
+  fi
+  if [ "$REMOVE_CLIENT" -eq 1 ]; then
+    echo "client removal: yes"
+  else
+    echo "client removal: no"
+  fi
+  if [ "$PURGE_DATA" -eq 1 ]; then
+    echo "daemon data purge: yes ($PROJECTS_ROOT_TO_PURGE)"
+  else
+    echo "daemon data purge: no"
+  fi
+}
+
+confirm_uninstall() {
+  if [ "$ASSUME_YES" -eq 1 ]; then
+    return 0
+  fi
+
+  if ! is_interactive_terminal; then
+    echo "final confirmation required in non-interactive mode; rerun with --yes to proceed" >&2
+    exit 1
+  fi
+
+  echo "planned uninstall actions:"
+  print_plan
+  if ! prompt_yes_no_default "Proceed with uninstall" "n"; then
+    echo "uninstall cancelled"
     exit 1
   fi
 }
@@ -357,6 +410,8 @@ main() {
   if [ "$PURGE_DATA" -eq 1 ]; then
     PROJECTS_ROOT_TO_PURGE="$(read_projects_root)"
   fi
+
+  confirm_uninstall
 
   if [ "$REMOVE_DAEMON" -eq 1 ]; then
     remove_daemon

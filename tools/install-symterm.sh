@@ -102,6 +102,11 @@ maybe_reexec_with_bash() {
   exec bash "$0" "$@"
 }
 
+has_prompt_terminal() {
+  [ -r /dev/tty ] && [ -w /dev/tty ] || return 1
+  : </dev/tty >/dev/tty 2>/dev/null
+}
+
 usage() {
   cat <<EOF
 Usage: ./tools/install-symterm.sh [--skip-setup-wizard] [--install-daemon] [--skip-daemon] [--dist-dir PATH]
@@ -464,37 +469,35 @@ path_contains_dir() {
 }
 
 is_interactive_terminal() {
-  [ -t 0 ] && [ -t 1 ]
+  has_prompt_terminal
 }
 
 prompt_default() {
   label="$1"
   default_value="$2"
   initial_value="${3-}"
+  if ! has_prompt_terminal; then
+    echo "no interactive terminal is available for prompts" >&2
+    exit 1
+  fi
   if [ -z "$initial_value" ]; then
     initial_value="$default_value"
   fi
+  if [ -n "$default_value" ]; then
+    prompt="$label [$default_value]: "
+  else
+    prompt="$label: "
+  fi
   if [ -n "${BASH_VERSION:-}" ]; then
-    if [ -n "$default_value" ]; then
-      if [ -n "$initial_value" ]; then
-        read -e -r -p "$label [$default_value]: " -i "$initial_value" value || true
-      else
-        read -e -r -p "$label [$default_value]: " value || true
-      fi
+    printf '%s' "$prompt" >/dev/tty
+    if [ -n "$initial_value" ]; then
+      read -e -r -i "$initial_value" value </dev/tty || true
     else
-      if [ -n "$initial_value" ]; then
-        read -e -r -p "$label: " -i "$initial_value" value || true
-      else
-        read -e -r -p "$label: " value || true
-      fi
+      read -e -r value </dev/tty || true
     fi
   else
-    if [ -n "$default_value" ]; then
-      printf "%s [%s]: " "$label" "$default_value" >&2
-    else
-      printf "%s: " "$label" >&2
-    fi
-    IFS= read -r value || true
+    printf '%s' "$prompt" >/dev/tty
+    IFS= read -r value </dev/tty || true
   fi
   if [ -z "$value" ]; then
     value="$initial_value"
@@ -615,7 +618,7 @@ run_setup_wizard() {
     return
   fi
   if ! is_interactive_terminal; then
-    echo "stdin/stdout is not a terminal; skipping setup wizard"
+    echo "no interactive terminal is available; skipping setup wizard"
     return
   fi
   echo "symtermd setup wizard"

@@ -121,20 +121,38 @@ On Windows, use:
 .\tools\install-symterm.ps1
 ```
 
-Use the tracked installers at [tools/install-symterm.sh](/c:/Users/cui/standalone/symterm/tools/install-symterm.sh) and [tools/install-symterm.ps1](/c:/Users/cui/standalone/symterm/tools/install-symterm.ps1). The default repository is `https://github.com/theTd/symterm/`.
+Use the tracked installers at `tools/install-symterm.sh` and `tools/install-symterm.ps1`. The default repository is `https://github.com/theTd/symterm/`.
 
-Both installers install the client first. After that they ask whether to install `symtermd`. On Linux, choosing yes continues into daemon setup and service installation. On unsupported platforms, the installer warns and skips daemon installation.
+Both installers install the client first. After that they ask whether to install `symtermd`. On Linux, choosing yes continues into daemon setup and service installation. The Unix shell installer also prompts when run as `curl ... | bash` or `wget ... | bash` as long as a controlling terminal is available. On unsupported platforms, the installer warns and skips daemon installation.
 
-To uninstall on Unix-like hosts, use [tools/uninstall-symterm.sh](/c:/Users/cui/standalone/symterm/tools/uninstall-symterm.sh). By default it removes `symtermd` and then asks whether to also remove the `symterm` client and whether to purge daemon user data:
+To uninstall in one step on Unix-like hosts:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/theTd/symterm/master/tools/uninstall-symterm.sh | bash
+```
+
+If `curl` is unavailable:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/theTd/symterm/master/tools/uninstall-symterm.sh | bash
+```
+
+If you already have the repository checked out locally, use `tools/uninstall-symterm.sh`. By default it removes `symtermd`, asks whether to also remove the `symterm` client and whether to purge daemon user data, and then asks for a final confirmation before making changes. The Unix shell uninstaller also prompts when run as `curl ... | bash` or `wget ... | bash` as long as a controlling terminal is available:
 
 ```bash
 ./tools/uninstall-symterm.sh
 ```
 
-For non-interactive use, pass explicit flags such as `--remove-client`, `--keep-client`, `--purge-data`, or `--keep-data`. `--all --purge-data` removes both binaries and also deletes the daemon projects root such as `~/.symterm`:
+For non-interactive use, pass `--yes` together with explicit flags such as `--remove-client`, `--keep-client`, `--purge-data`, or `--keep-data`. `--yes --all --purge-data` removes both binaries and also deletes the daemon projects root such as `~/.symterm`:
 
 ```bash
-./tools/uninstall-symterm.sh --all --purge-data
+./tools/uninstall-symterm.sh --yes --all --purge-data
+```
+
+The same full uninstall can be run remotely in one step:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/theTd/symterm/master/tools/uninstall-symterm.sh | bash -s -- --yes --all --purge-data
 ```
 
 If you choose daemon install on Linux, the installer runs an interactive setup wizard by default. If an existing install already has `symtermd.env`, the wizard shows those current values as defaults. Use `./tools/install-symterm.sh --skip-setup-wizard` to reuse the current or pre-exported values without prompting.
