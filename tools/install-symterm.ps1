@@ -55,9 +55,9 @@ function Resolve-Repo {
 }
 
 function Resolve-Arch {
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+    $arch = $env:PROCESSOR_ARCHITECTURE.ToLowerInvariant()
     switch ($arch) {
-        'x64' { 'amd64' }
+        'amd64' { 'amd64' }
         'arm64' { 'arm64' }
         default { throw "Unsupported CPU architecture: $arch" }
     }
