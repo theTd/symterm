@@ -722,8 +722,16 @@ StandardError=append:$LOG_PATH
 [Install]
 WantedBy=default.target
 EOF
-  systemctl --user daemon-reload
-  systemctl --user enable --now "$SERVICE_NAME.service"
+  if ! systemctl --user daemon-reload 2>/dev/null; then
+    echo "warning: systemd user daemon-reload failed (dbus unavailable), falling back to background mode" >&2
+    install_background
+    return
+  fi
+  if ! systemctl --user enable --now "$SERVICE_NAME.service" 2>/dev/null; then
+    echo "warning: systemd user enable failed (dbus unavailable), falling back to background mode" >&2
+    install_background
+    return
+  fi
   echo "systemd-user" >"$STATE_FILE"
 }
 
