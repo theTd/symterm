@@ -244,8 +244,7 @@ func sshDialContext(ctx context.Context, sshClient *cryptossh.Client, network st
 	done := make(chan result, 1)
 	go func() {
 		if sshClient == nil {
-			var dialer net.Dialer
-			conn, err := dialer.DialContext(ctx, network, addr)
+			conn, err := proxyDialContext(ctx, network, addr)
 			done <- result{conn: conn, err: err}
 			return
 		}
