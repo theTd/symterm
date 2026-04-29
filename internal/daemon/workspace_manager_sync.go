@@ -1,11 +1,14 @@
 package daemon
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"hash"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,6 +19,21 @@ import (
 	"symterm/internal/diagnostic"
 	"symterm/internal/proto"
 )
+
+func decompressData(data []byte, compression string) ([]byte, error) {
+	if compression == "" {
+		return data, nil
+	}
+	if compression == "gzip" {
+		r, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		defer r.Close()
+		return io.ReadAll(r)
+	}
+	return data, nil
+}
 
 type syncSession struct {
 	sessionID       string
@@ -462,13 +480,21 @@ func (m *WorkspaceManager) ApplyChunk(projectKey proto.ProjectKey, request proto
 	if request.Offset != upload.written {
 		return proto.NewError(proto.ErrFileCommitFailed, "chunk offset is not contiguous")
 	}
-	if _, err := upload.file.Write(request.Data); err != nil {
+	data := request.Data
+	if request.Compression != "" {
+		decompressed, err := decompressData(data, request.Compression)
+		if err != nil {
+			return proto.NewError(proto.ErrFileCommitFailed, fmt.Sprintf("decompress chunk failed: %v", err))
+		}
+		data = decompressed
+	}
+	if _, err := upload.file.Write(data); err != nil {
 		return err
 	}
-	if _, err := upload.hasher.Write(request.Data); err != nil {
+	if _, err := upload.hasher.Write(data); err != nil {
 		return err
 	}
-	upload.written += int64(len(request.Data))
+	upload.written += int64(len(data))
 	return nil
 }
 
@@ -657,17 +683,25 @@ func (m *WorkspaceManager) UploadBundleCommit(projectKey proto.ProjectKey, reque
 		if err := validateWorkspacePath(file.Path); err != nil {
 			return err
 		}
-		if hash := syncSHA256Hex(file.Data); hash != file.ContentHash {
+		data := file.Data
+		if file.Compression != "" {
+			decompressed, err := decompressData(data, file.Compression)
+			if err != nil {
+				return proto.NewError(proto.ErrFileCommitFailed, fmt.Sprintf("decompress bundle file failed: %v", err))
+			}
+			data = decompressed
+		}
+		if hash := syncSHA256Hex(data); hash != file.ContentHash {
 			return proto.NewError(proto.ErrFileCommitFailed, "uploaded bundle file hash does not match the committed hash")
 		}
-		if int64(len(file.Data)) != file.Metadata.Size {
-			return proto.NewError(proto.ErrFileCommitFailed, "uploaded bundle file size does not match the expected size")
+		if int64(len(data)) != file.Metadata.Size {
+			return proto.NewError(proto.ErrFileCommitFailed, fmt.Sprintf("uploaded bundle file size does not match the expected size: path=%s expected=%d actual=%d compression=%q", file.Path, file.Metadata.Size, len(data), file.Compression))
 		}
 		target := syncWorkspacePath(session, file.Path)
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return wrapOwnerWriteError(err)
 		}
-		if err := os.WriteFile(target, file.Data, fs.FileMode(file.Metadata.Mode)); err != nil {
+		if err := os.WriteFile(target, data, fs.FileMode(file.Metadata.Mode)); err != nil {
 			return wrapOwnerWriteError(err)
 		}
 		if err := applyFileMetadata(target, normalizeMetadata(file.Metadata)); err != nil {
