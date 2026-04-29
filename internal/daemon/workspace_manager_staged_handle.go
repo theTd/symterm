@@ -773,12 +773,14 @@ func (m *WorkspaceManager) streamOwnerFileApply(ctx context.Context, client owne
 	metadata := handle.metadata
 	metadata.Size = info.Size()
 
-	started, err := client.BeginFileUpload(ctx, proto.OwnerFileBeginRequest{
+	beginCtx, beginCancel := ownerRPCContext(ctx)
+	started, err := client.BeginFileUpload(beginCtx, proto.OwnerFileBeginRequest{
 		Op:           handle.op,
 		Path:         handle.path,
 		Metadata:     metadata,
 		ExpectedSize: metadata.Size,
 	})
+	beginCancel()
 	if err != nil {
 		return err
 	}
@@ -797,11 +799,14 @@ func (m *WorkspaceManager) streamOwnerFileApply(ctx context.Context, client owne
 	for {
 		n, readErr := file.Read(buf)
 		if n > 0 {
-			if err := client.ApplyFileChunk(ctx, proto.OwnerFileApplyChunkRequest{
+			chunkCtx, chunkCancel := ownerRPCContext(ctx)
+			err := client.ApplyFileChunk(chunkCtx, proto.OwnerFileApplyChunkRequest{
 				UploadID: started.UploadID,
 				Offset:   offset,
 				Data:     append([]byte(nil), buf[:n]...),
-			}); err != nil {
+			})
+			chunkCancel()
+			if err != nil {
 				abortUpload(err.Error())
 				return err
 			}
@@ -816,9 +821,12 @@ func (m *WorkspaceManager) streamOwnerFileApply(ctx context.Context, client owne
 		}
 	}
 
-	if err := client.CommitFileUpload(ctx, proto.OwnerFileCommitRequest{
+	commitCtx, commitCancel := ownerRPCContext(ctx)
+	err = client.CommitFileUpload(commitCtx, proto.OwnerFileCommitRequest{
 		UploadID: started.UploadID,
-	}); err != nil {
+	})
+	commitCancel()
+	if err != nil {
 		abortUpload(err.Error())
 		return err
 	}
@@ -828,11 +836,14 @@ func (m *WorkspaceManager) streamOwnerFileApply(ctx context.Context, client owne
 func (m *WorkspaceManager) commitStagedMkdir(ctx context.Context, projectKey proto.ProjectKey, layout ProjectLayout, handle *stagedHandle) (proto.FsReply, error) {
 	authority := m.authorityForProject(projectKey)
 	if authority.client != nil {
-		if err := authority.client.Apply(ctx, proto.OwnerFileApplyRequest{
+		ownerCtx, cancel := ownerRPCContext(ctx)
+		err := authority.client.Apply(ownerCtx, proto.OwnerFileApplyRequest{
 			Op:       handle.op,
 			Path:     handle.path,
 			Metadata: handle.metadata,
-		}); err != nil {
+		})
+		cancel()
+		if err != nil {
 			return proto.FsReply{}, wrapOwnerWriteError(err)
 		}
 	}
@@ -878,10 +889,13 @@ func (m *WorkspaceManager) commitStagedMkdir(ctx context.Context, projectKey pro
 func (m *WorkspaceManager) commitStagedDelete(ctx context.Context, projectKey proto.ProjectKey, layout ProjectLayout, handle *stagedHandle) (proto.FsReply, error) {
 	authority := m.authorityForProject(projectKey)
 	if authority.client != nil {
-		if err := authority.client.Apply(ctx, proto.OwnerFileApplyRequest{
+		ownerCtx, cancel := ownerRPCContext(ctx)
+		err := authority.client.Apply(ownerCtx, proto.OwnerFileApplyRequest{
 			Op:   handle.op,
 			Path: handle.path,
-		}); err != nil {
+		})
+		cancel()
+		if err != nil {
 			return proto.FsReply{}, wrapOwnerWriteError(err)
 		}
 	}
@@ -922,11 +936,14 @@ func (m *WorkspaceManager) commitStagedRename(ctx context.Context, projectKey pr
 
 	authority := m.authorityForProject(projectKey)
 	if authority.client != nil {
-		if err := authority.client.Apply(ctx, proto.OwnerFileApplyRequest{
+		ownerCtx, cancel := ownerRPCContext(ctx)
+		err := authority.client.Apply(ownerCtx, proto.OwnerFileApplyRequest{
 			Op:      handle.op,
 			Path:    handle.path,
 			NewPath: handle.newPath,
-		}); err != nil {
+		})
+		cancel()
+		if err != nil {
 			return proto.FsReply{}, wrapOwnerWriteError(err)
 		}
 	}

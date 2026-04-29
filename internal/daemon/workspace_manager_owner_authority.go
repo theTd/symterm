@@ -22,6 +22,20 @@ type workspaceAuthority struct {
 	managed bool
 }
 
+// ownerRPCTimeout bounds how long a single owner-fs RPC call may block. A
+// silently dead owner channel would otherwise pin a FUSE handler indefinitely;
+// SSH keepalive and the transport.Client idle watchdog defend the connection
+// layer, but this hard per-call ceiling ensures the workspace operation surfaces
+// an error rather than hanging forever even if those defences misfire.
+const ownerRPCTimeout = 30 * time.Second
+
+func ownerRPCContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := parent.Deadline(); ok {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, ownerRPCTimeout)
+}
+
 func (a workspaceAuthority) normalizedState() proto.AuthorityState {
 	if !a.managed {
 		return proto.AuthorityStateStable
@@ -46,8 +60,6 @@ func (m *WorkspaceManager) SetAuthoritativeRoot(projectKey proto.ProjectKey, roo
 
 func (m *WorkspaceManager) SetAuthoritativeClient(projectKey proto.ProjectKey, client ownerfs.Client) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	m.authorities[projectKey.String()] = workspaceAuthority{
 		client:  client,
 		state:   proto.AuthorityStateStable,
@@ -56,7 +68,33 @@ func (m *WorkspaceManager) SetAuthoritativeClient(projectKey proto.ProjectKey, c
 	if m.authorityCond != nil {
 		m.authorityCond.Broadcast()
 	}
+	m.mu.Unlock()
+
+	// Defence in depth: even if the control-layer disconnect handler misfires,
+	// watch the owner channel directly so a silently dead authority is demoted
+	// instead of leaving waitForMutationAuthority pinned forever.
+	if done := client.Done(); done != nil {
+		go m.watchAuthoritativeClient(projectKey, client, done)
+	}
 	return nil
+}
+
+func (m *WorkspaceManager) watchAuthoritativeClient(projectKey proto.ProjectKey, client ownerfs.Client, done <-chan struct{}) {
+	<-done
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	authority := m.authorities[projectKey.String()]
+	if authority.client != client {
+		return
+	}
+	authority.client = nil
+	authority.root = ""
+	authority.state = proto.AuthorityStateAbsent
+	m.authorities[projectKey.String()] = authority
+	if m.authorityCond != nil {
+		m.authorityCond.Broadcast()
+	}
 }
 
 func (m *WorkspaceManager) ClearAuthoritativeRoot(projectKey proto.ProjectKey) error {
@@ -126,7 +164,9 @@ func (m *WorkspaceManager) FsReadContext(ctx context.Context, projectKey proto.P
 	if authority.client != nil && (!usingHandle || handleTarget.backingKind == stagedHandleBackingOwnerReadThrough) {
 		ownerRequest := request
 		ownerRequest.HandleID = ""
-		reply, err := authority.client.FsRead(ctx, op, ownerRequest)
+		ownerCtx, cancel := ownerRPCContext(ctx)
+		reply, err := authority.client.FsRead(ownerCtx, op, ownerRequest)
+		cancel()
 		if err != nil {
 			return proto.FsReply{}, err
 		}
@@ -232,7 +272,9 @@ func (m *WorkspaceManager) fsReadRoot(ctx context.Context, projectKey proto.Proj
 
 	authority := m.authorityForProject(projectKey)
 	if authority.client != nil {
-		reply, err := authority.client.FsRead(ctx, op, request)
+		ownerCtx, cancel := ownerRPCContext(ctx)
+		reply, err := authority.client.FsRead(ownerCtx, op, request)
+		cancel()
 		if err != nil {
 			return proto.FsReply{}, err
 		}
