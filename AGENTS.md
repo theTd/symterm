@@ -83,12 +83,22 @@ Use this as the fast path when locating code:
 | `internal/cmd/client/` | Client runtime boot, SSH dial, sync progress TUI, authority broker, and top-level command execution flow |
 | `internal/cmd/daemon/` | Daemon boot, SSH server, tmux status helper, and process lifecycle wiring |
 | `internal/cmd/adminclient/` | Local admin CLI over the daemon Unix socket |
+| `internal/cmd/completion/` | Shell completion script generation |
 | `internal/cmd/setupwizard/` | Interactive client setup wizard |
+| `internal/app/` | Client-side application flows: hello/open/ensure/resume/start-command, owner runtime bootstrapping, and stdio/session orchestration |
 | `internal/control/` | Main business service layer and the best starting point for session/project/sync/command rules |
 | `internal/project/` | Per-project state machine, owner/follower role changes, reconcile confirmation, and project snapshots |
 | `internal/daemon/` | Workspace runtime implementation: mount management, publish mode, staged writes, PTY/tmux runner, and sync planning |
-| `internal/sync/` | Client-side snapshotting, initial sync, owner workspace watch, hash cache, and local owner FS runtime |
-| `internal/transport/` | SSH transport, JSON-RPC codec/dispatch, stdio channels, and ownerfs RPC forwarding |
+| `internal/diagnostic/` | Diagnostics reporter for runtime health and error tracking |
+| `internal/invalidation/` | Invalidation change tracking for owner workspace coherence |
+| `internal/sync/` | Client-side snapshotting, initial sync, owner workspace watch, persistent hash cache, and local owner FS runtime |
+| `internal/transport/` | SSH transport, JSON-RPC codec/dispatch, stdio channels, keepalive, and ownerfs RPC forwarding |
+| `internal/ssh/` | SSH endpoint parsing and proxy helpers |
+| `internal/eventstream/` | Generic cursor-based append/subscribe event store |
+| `internal/ownerfs/` | Client adapter for owner filesystem RPCs |
+| `internal/projectready/` | Wait/refresh helper for projects that are not yet command-ready |
+| `internal/portablefs/` | Cross-platform path normalization and path-safety helpers |
+| `internal/workspaceidentity/` | Stable per-install workspace identity generation used during authority and reconcile decisions |
 | `internal/admin/` | Admin store, socket RPC, HTTP server, API handlers, event hub, and embedded static asset serving |
 | `internal/config/` | Client and daemon config parsing plus endpoint and env handling |
 | `internal/proto/` | Shared wire types and error codes |
@@ -107,9 +117,13 @@ Common file-level jump points:
 - `internal/control/project_coordinator.go` -> project/session coordination
 - `internal/daemon/workspace_manager.go` -> workspace runtime core
 - `internal/daemon/workspace_manager_sync.go` -> sync planning and apply path
+- `internal/daemon/workspace_manager_owner_authority.go` -> owner authority split and ownerfs binding
+- `internal/daemon/workspace_manager_conservative.go` -> conservative mode entry for follower workspace safety
+- `internal/sync/hash_cache.go` -> persistent hash cache for workspace snapshotting
+- `internal/transport/ownerfs_rpc.go` -> ownerfs RPC forwarding with idle timeout
 - `internal/admin/http_v1.go` -> admin API surface
 - `internal/admin/static_assets.go` -> embedded admin UI serving
-- `web/admin/src/pages/` and `web/admin/src/features/` -> admin UI screens and feature modules
+- `web/admin/src/pages/` -> admin UI screens (Overview, Sessions, Users, Audit, System)
 
 ### Key internal packages
 
@@ -158,6 +172,8 @@ Common file-level jump points:
 - `symtermd` is Linux-oriented and expects FUSE3 for real workspace publication. Use `SYMTERMD_ALLOW_UNSAFE_NO_FUSE=1` only for local development or tests.
 - `internal/daemon/workspace_manager_test.go` remains a strong integration-style reference for sync and staged-write behavior; the nearby `workspace_manager_sync_*` tests cover newer sync planner scenarios.
 - Build version defaults to `dev` in `internal/buildinfo/version.go` and is overridden in CI and release builds via `-ldflags`.
-- Installer and uninstaller behavior lives in `tools/install-symterm.*` and `tools/uninstall-symterm.sh`; if user-facing install docs change, verify those scripts too.
+- Installer and uninstaller behavior lives in `tools/install-symterm.*` and `tools/uninstall-symterm.sh`; `tools/fuse-cleanup.sh` is a helper for force-unmounting stale FUSE mounts. If user-facing install docs change, verify those scripts too.
 - Command execution persists logs under each project's `commands/` directory; use `README.md` as the current user-facing reference for on-disk layout and operational details.
+- The repository includes a `docs/` directory for supplementary developer documentation such as performance optimization guides.
+- `internal/sync/hash_cache.go` implements a persistent hash cache keyed by workspace instance ID to avoid re-hashing unchanged files across sync sessions.
 - When documentation and implementation diverge, treat the codebase as the source of truth.
