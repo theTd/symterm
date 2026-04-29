@@ -85,7 +85,9 @@ func Run(ctx context.Context, cfg config.DaemonConfig, stdin io.Reader, stdout i
 		}},
 	)
 	defer shutdown.Shutdown("run exit")
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		_ = shutdown.Shutdown("context canceled")
 	}()
@@ -120,6 +122,9 @@ func Run(ctx context.Context, cfg config.DaemonConfig, stdin io.Reader, stdout i
 	err = RunSSHListener(ctx, service, container.AdminStore, listener, hostSigner, cfg.Tracef)
 	shutdownErr := shutdown.Shutdown("ssh listener stopped")
 	serveWG.Wait()
+	// Wait for the shutdown goroutine to finish so project runtimes (including
+	// FUSE mounts) are fully stopped before the process exits.
+	<-shutdownDone
 	tracef(cfg.Tracef, "daemon ssh listener stopped error=%v shutdown_error=%v", err, shutdownErr)
 	if err != nil && shutdownErr != nil {
 		return errors.Join(err, shutdownErr)

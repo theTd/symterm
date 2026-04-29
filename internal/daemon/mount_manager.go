@@ -203,14 +203,23 @@ func (m *MountManager) stopMatchingSessions(match func(string) bool) error {
 	m.mu.Unlock()
 
 	var errs []error
+	var wg sync.WaitGroup
+	var errMu sync.Mutex
 	for _, session := range sessions {
 		if session == nil {
 			continue
 		}
-		if err := session.Stop(); err != nil {
-			errs = append(errs, err)
-		}
+		wg.Add(1)
+		go func(s projectMountSession) {
+			defer wg.Done()
+			if err := s.Stop(); err != nil {
+				errMu.Lock()
+				errs = append(errs, err)
+				errMu.Unlock()
+			}
+		}(session)
 	}
+	wg.Wait()
 	return errors.Join(errs...)
 }
 

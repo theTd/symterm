@@ -72,6 +72,7 @@ ENV_FILE="$CONFIG_DIR/symtermd.env"
 CLIENT_BIN_PATH="$BIN_DIR/symterm"
 DAEMON_BIN_PATH="$BIN_DIR/symtermd"
 LOG_PATH="$RUN_DIR/symtermd.log"
+FUSE_CLEANUP_PATH="$BIN_DIR/symtermd-fuse-cleanup"
 USER_UNIT_PATH="$USER_UNIT_DIR/$SERVICE_NAME.service"
 STATE_FILE="$RUN_DIR/install-mode"
 
@@ -701,8 +702,50 @@ stop_existing_service() {
   fi
 }
 
+write_fuse_cleanup_script() {
+  cat >"$FUSE_CLEANUP_PATH" <<'CLEANUP_EOF'
+#!/bin/bash
+# Cleanup stale symtermd FUSE mounts and connections before daemon start.
+set -e
+
+abort_stale_connections() {
+  local conn_ids=""
+  while IFS= read -r line; do
+    dev_field=$(echo "$line" | awk '{print $3}')
+    minor=$(echo "$dev_field" | cut -d: -f2)
+    if [ -n "$minor" ] && [ -d "/sys/fs/fuse/connections/$minor" ]; then
+      conn_ids="$conn_ids $minor"
+    fi
+  done < <(grep 'fuse.symterm' /proc/self/mountinfo 2>/dev/null || true)
+
+  for conn_id in $conn_ids; do
+    if [ -w "/sys/fs/fuse/connections/$conn_id/abort" ]; then
+      printf '1' > "/sys/fs/fuse/connections/$conn_id/abort" 2>/dev/null || true
+    fi
+  done
+}
+
+detach_stale_mounts() {
+  while IFS= read -r line; do
+    mountpoint=$(echo "$line" | awk '{print $5}')
+    mountpoint=$(printf '%b' "$mountpoint")
+    if [ -n "$mountpoint" ]; then
+      fusermount3 -u -z "$mountpoint" 2>/dev/null || true
+      umount -l "$mountpoint" 2>/dev/null || true
+    fi
+  done < <(grep 'fuse.symterm' /proc/self/mountinfo 2>/dev/null || true)
+}
+
+abort_stale_connections
+detach_stale_mounts
+sleep 1
+CLEANUP_EOF
+  chmod +x "$FUSE_CLEANUP_PATH"
+}
+
 install_user_systemd() {
   mkdir -p "$USER_UNIT_DIR"
+  write_fuse_cleanup_script
   cat >"$USER_UNIT_PATH" <<EOF
 [Unit]
 Description=symterm daemon
@@ -711,10 +754,11 @@ After=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$ENV_FILE
+ExecStartPre=$FUSE_CLEANUP_PATH
 ExecStart=$DAEMON_BIN_PATH
 Restart=always
 RestartSec=2
-TimeoutStopSec=10s
+TimeoutStopSec=30s
 KillMode=mixed
 StandardOutput=append:$LOG_PATH
 StandardError=append:$LOG_PATH
@@ -736,6 +780,7 @@ EOF
 }
 
 install_system_systemd() {
+  write_fuse_cleanup_script
   cat >"$SYSTEM_UNIT_PATH" <<EOF
 [Unit]
 Description=symterm daemon
@@ -744,10 +789,11 @@ After=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$ENV_FILE
+ExecStartPre=$FUSE_CLEANUP_PATH
 ExecStart=$DAEMON_BIN_PATH
 Restart=always
 RestartSec=2
-TimeoutStopSec=10s
+TimeoutStopSec=30s
 KillMode=mixed
 StandardOutput=append:$LOG_PATH
 StandardError=append:$LOG_PATH

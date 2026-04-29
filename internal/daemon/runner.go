@@ -359,7 +359,7 @@ func (m *RuntimeManager) ResizeTTY(projectKey proto.ProjectKey, commandID string
 }
 
 func (m *RuntimeManager) WriteStdin(projectKey proto.ProjectKey, commandID string, data []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	active, err := m.waitForActive(ctx, projectKey, commandID)
@@ -370,7 +370,7 @@ func (m *RuntimeManager) WriteStdin(projectKey proto.ProjectKey, commandID strin
 }
 
 func (m *RuntimeManager) CloseStdin(projectKey proto.ProjectKey, commandID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	active, err := m.waitForActive(ctx, projectKey, commandID)
@@ -437,6 +437,12 @@ func (m *RuntimeManager) stopMatchingProjects(match func(string) bool) error {
 		if err := active.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			errs = append(errs, err)
 		}
+	}
+	for _, active := range commands {
+		if active == nil || active.cmd == nil || active.cmd.Process == nil {
+			continue
+		}
+		_, _ = active.cmd.Process.Wait()
 	}
 	for _, waitCh := range startupWaits {
 		close(waitCh)

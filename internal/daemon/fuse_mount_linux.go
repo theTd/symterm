@@ -5,12 +5,13 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"hash/fnv"
-	"io"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -56,6 +57,11 @@ func startFuseMount(projectKey proto.ProjectKey, layout ProjectLayout, projectFS
 		_ = session.Stop()
 		return nil, err
 	}
+	// Capture the FUSE connection ID now while the mount is healthy.
+	// Storing it avoids creating temp files inside the mount during shutdown.
+	if connID, err := fuseConnectionID(layout.MountDir); err == nil {
+		session.connID = connID
+	}
 	session.startInvalidatePump(projectKey, projectFS)
 	return session, nil
 }
@@ -63,6 +69,7 @@ func startFuseMount(projectKey proto.ProjectKey, layout ProjectLayout, projectFS
 type fuseMountSession struct {
 	server    *fuse.Server
 	mountDir  string
+	connID    uint64
 	failures  chan error
 	failOnce  sync.Once
 	stopOnce  sync.Once
@@ -88,24 +95,11 @@ func (s *fuseMountSession) Validate() error {
 	if !mounted {
 		return proto.NewError(proto.ErrMountFailed, "fuse mountpoint is not active")
 	}
-	info, err := os.Stat(s.mountDir)
-	if err != nil {
-		return proto.NewError(proto.ErrMountFailed, "stat fuse mountpoint: "+err.Error())
-	}
-	if !info.IsDir() {
-		return proto.NewError(proto.ErrMountFailed, "fuse mountpoint is not a directory")
-	}
-	dir, err := os.Open(s.mountDir)
-	if err != nil {
-		return proto.NewError(proto.ErrMountFailed, "open fuse mountpoint: "+err.Error())
-	}
-	if _, err := dir.Readdirnames(1); err != nil && !errors.Is(err, io.EOF) {
-		_ = dir.Close()
-		return proto.NewError(proto.ErrMountFailed, "read fuse mountpoint: "+err.Error())
-	}
-	if err := dir.Close(); err != nil {
-		return proto.NewError(proto.ErrMountFailed, "close fuse mountpoint: "+err.Error())
-	}
+	// Do NOT access the mount contents (stat, open, readdir) from within
+	// the same process. Accessing a FUSE mount from its own server process
+	// can deadlock or cause D-state under SIGKILL because the kernel may
+	// put the requesting thread in uninterruptible sleep waiting for a
+	// FUSE response that can never arrive if the server threads are killed.
 	return nil
 }
 
@@ -117,10 +111,60 @@ func (s *fuseMountSession) Stop() error {
 			close(s.failures)
 		})
 		if s.server != nil {
-			err = s.server.Unmount()
+			// Abort the FUSE connection so the kernel wakes up any thread
+			// blocked in read(/dev/fuse) and returns ENODEV. This is the
+			// only reliable way to prevent D-state when the mount is torn
+			// down while go-fuse loops are still running.
+			_ = s.abortFuseConnection()
+
+			// Give go-fuse server loops a moment to see ENODEV and exit.
+			// server.Unmount() calls fusermount3 -u (non-lazy) which fails
+			// when files are open, and then skips ms.loops.Wait(). Calling
+			// detachMountpoint() while loops are still reading can put the
+			// thread into D-state. A short sleep lets the loops finish.
+			time.Sleep(200 * time.Millisecond)
+
+			// Lazy-detach the mountpoint so it is no longer visible in the
+			// namespace. go-fuse will not try to unmount again because we
+			// do not call server.Unmount() here.
+			if detachErr := detachMountpoint(s.mountDir); detachErr != nil {
+				err = detachErr
+			}
 		}
 	})
 	return err
+}
+
+func (s *fuseMountSession) abortFuseConnection() error {
+	connID := s.connID
+	if connID == 0 {
+		var err error
+		connID, err = fuseConnectionID(s.mountDir)
+		if err != nil {
+			return err
+		}
+	}
+	abortPath := fmt.Sprintf("/sys/fs/fuse/connections/%d/abort", connID)
+	return os.WriteFile(abortPath, []byte("1"), 0o644)
+}
+
+func fuseConnectionID(mountDir string) (uint64, error) {
+	// The FUSE connection ID is the Dev field from Stat_t for a file inside the mount.
+	// We must create a temp file inside the mount and stat it; stat on the mount
+	// directory itself may return the parent filesystem's device, not the FUSE
+	// connection device.
+	var st syscall.Stat_t
+	tmpPath := filepath.Join(mountDir, ".fuse-stat-"+strconv.FormatInt(time.Now().UnixNano(), 10))
+	fd, err := syscall.Open(tmpPath, syscall.O_CREAT|syscall.O_RDONLY, 0o600)
+	if err != nil {
+		return 0, err
+	}
+	_ = syscall.Close(fd)
+	defer syscall.Unlink(tmpPath)
+	if err := syscall.Stat(tmpPath, &st); err != nil {
+		return 0, err
+	}
+	return st.Dev, nil
 }
 
 func (s *fuseMountSession) startInvalidatePump(projectKey proto.ProjectKey, projectFS ProjectFilesystem) {

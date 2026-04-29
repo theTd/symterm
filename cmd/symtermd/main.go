@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"symterm/internal/buildinfo"
 	daemoncmd "symterm/internal/cmd/daemon"
@@ -72,6 +73,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "symtermd: %v\n", err)
 		os.Exit(3)
 	}
+	// Allow any FUSE server threads that received abort/ENODEV a moment to
+	// fully exit their read(2) syscalls before the runtime invokes exit_group.
+	time.Sleep(500 * time.Millisecond)
 }
 
 func daemonUsage() string {
