@@ -24,7 +24,12 @@ import (
 	cryptossh "golang.org/x/crypto/ssh"
 )
 
-const sshUser = "symterm"
+const (
+	sshUser              = "symterm"
+	sshKeepaliveInterval = 30 * time.Second
+	sshKeepaliveTimeout  = 30 * time.Second
+	ownerFSIdleTimeout   = 3 * time.Minute
+)
 
 func RunSSHListener(
 	ctx context.Context,
@@ -94,6 +99,7 @@ func serveSSHConn(ctx context.Context, service control.ClientService, rawConn ne
 		_ = serverConn.Wait()
 		cancel()
 	}()
+	go runSSHKeepalive(connCtx, serverConn, rawConn, trace)
 
 	principal, err := principalFromPermissions(serverConn.Permissions)
 	if err != nil {
@@ -168,7 +174,7 @@ func serveSSHConn(ctx context.Context, service control.ClientService, rawConn ne
 						return
 					}
 					defer service.DetachSessionChannel(clientID, channelID)
-					client := transport.NewOwnerFileRPCClient(channel, channel, channel)
+					client := transport.NewOwnerFileRPCClientWithIdleTimeout(channel, channel, channel, ownerFSIdleTimeout)
 					if err := service.RegisterOwnerFileClient(clientID, client); err != nil {
 						diagnostic.Background(service.Diagnostics(), "register ownerfs ssh channel", err)
 						_ = channel.Close()
@@ -251,6 +257,27 @@ func encodePrincipalPermissions(principal control.AuthenticatedPrincipal) *crypt
 			"token_source":     string(principal.TokenSource),
 			"authenticated_at": principal.AuthenticatedAt.UTC().Format(time.RFC3339Nano),
 		},
+	}
+}
+
+func runSSHKeepalive(ctx context.Context, serverConn *cryptossh.ServerConn, rawConn net.Conn, trace traceFunc) {
+	ticker := time.NewTicker(sshKeepaliveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		timer := time.AfterFunc(sshKeepaliveTimeout, func() {
+			_ = serverConn.Close()
+		})
+		_, _, err := serverConn.SendRequest("keepalive@openssh.com", true, nil)
+		timer.Stop()
+		if err != nil {
+			tracef(trace, "ssh keepalive ended remote=%q error=%v", rawConn.RemoteAddr().String(), err)
+			return
+		}
 	}
 }
 

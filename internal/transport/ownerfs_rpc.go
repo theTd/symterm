@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"time"
 
 	"symterm/internal/ownerfs"
 	"symterm/internal/proto"
@@ -27,6 +28,18 @@ type ownerFileRPCClient struct {
 func NewOwnerFileRPCClient(reader io.Reader, writer io.Writer, closer io.Closer) ownerfs.Client {
 	return &ownerFileRPCClient{
 		client: NewClient(reader, writer),
+		closer: closer,
+	}
+}
+
+// NewOwnerFileRPCClientWithIdleTimeout returns an ownerfs.Client whose
+// underlying JSON-RPC reader will force the channel closed if no bytes arrive
+// for idleTimeout. This is the defence against a silently dead owner stdio
+// channel (no FIN/RST, no SSH-level keepalive failure surfaced) — without it,
+// a stuck readLoop wedges every FUSE handler waiting on owner-RPC calls.
+func NewOwnerFileRPCClientWithIdleTimeout(reader io.Reader, writer io.Writer, closer io.Closer, idleTimeout time.Duration) ownerfs.Client {
+	return &ownerFileRPCClient{
+		client: NewClientWithIdleTimeout(reader, writer, closer, idleTimeout),
 		closer: closer,
 	}
 }

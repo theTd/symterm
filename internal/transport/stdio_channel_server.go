@@ -102,6 +102,9 @@ func ServeStdioChannel(
 		case err := <-inputErrCh:
 			cancelWait()
 			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return err
+				}
 				return writeStdioChannelError(bufferedWriter, err)
 			}
 			inputErrCh = nil
