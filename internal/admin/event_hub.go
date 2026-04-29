@@ -10,24 +10,26 @@ import (
 const defaultEventRetention = 256
 
 const (
-	EventKindDaemonUpdated = "daemon_updated"
-	EventKindSessionUpsert = "session_upsert"
-	EventKindSessionClosed = "session_closed"
-	EventKindUserUpsert    = "user_upsert"
-	EventKindTokenIssued   = "token_issued"
-	EventKindTokenRevoked  = "token_revoked"
-	EventKindAuditAppended = "audit_appended"
+	EventKindDaemonUpdated  = "daemon_updated"
+	EventKindSessionUpsert  = "session_upsert"
+	EventKindSessionClosed  = "session_closed"
+	EventKindUserUpsert     = "user_upsert"
+	EventKindTokenIssued    = "token_issued"
+	EventKindTokenRevoked   = "token_revoked"
+	EventKindAuditAppended  = "audit_appended"
+	EventKindGoroutineStuck = "goroutine_stuck"
 )
 
 type Event struct {
-	Cursor    uint64           `json:"cursor"`
-	Kind      string           `json:"kind"`
-	Daemon    *DaemonInfo      `json:"daemon,omitempty"`
-	Session   *SessionSnapshot `json:"session,omitempty"`
-	SessionID string           `json:"session_id,omitempty"`
-	User      *UserRecord      `json:"user,omitempty"`
-	Token     *UserTokenRecord `json:"token,omitempty"`
-	Audit     *AuditRecord     `json:"audit,omitempty"`
+	Cursor    uint64             `json:"cursor"`
+	Kind      string             `json:"kind"`
+	Daemon    *DaemonInfo        `json:"daemon,omitempty"`
+	Session   *SessionSnapshot   `json:"session,omitempty"`
+	SessionID string             `json:"session_id,omitempty"`
+	User      *UserRecord        `json:"user,omitempty"`
+	Token     *UserTokenRecord   `json:"token,omitempty"`
+	Audit     *AuditRecord       `json:"audit,omitempty"`
+	Goroutine *GoroutineSnapshot `json:"goroutine,omitempty"`
 }
 
 type EventHub struct {
@@ -235,6 +237,10 @@ func cloneEvent(event Event) Event {
 	if event.Audit != nil {
 		copy := *event.Audit
 		event.Audit = &copy
+	}
+	if event.Goroutine != nil {
+		copy := cloneGoroutineSnapshot(*event.Goroutine)
+		event.Goroutine = &copy
 	}
 	return event
 }

@@ -29,6 +29,7 @@ func NewDaemonContainer(ctx context.Context, cfg config.DaemonConfig) (*DaemonCo
 	if err != nil {
 		return nil, err
 	}
+	eventHub.StartGoroutineSampler(ctx)
 	var service *control.Service
 	runtimeFacade := NewProjectRuntimeFacade(
 		ctx,
