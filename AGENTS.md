@@ -176,4 +176,5 @@ Common file-level jump points:
 - Command execution persists logs under each project's `commands/` directory; use `README.md` as the current user-facing reference for on-disk layout and operational details.
 - The repository includes a `docs/` directory for supplementary developer documentation such as performance optimization guides.
 - `internal/sync/hash_cache.go` implements a persistent hash cache keyed by workspace instance ID to avoid re-hashing unchanged files across sync sessions.
+- **CI skip rule**: for changes that do not affect compilation, tests, or build artifacts—such as pure documentation updates to `AGENTS.md`, `README.md`, or `docs/`—the commit message **must** include `[ci skip]` to avoid wasting CI runner time. Review the CI workflow scope in `.github/workflows/ci.yml` before deciding.
 - When documentation and implementation diverge, treat the codebase as the source of truth.
