@@ -327,6 +327,48 @@ func hashWorkspaceFilesParallel(files []LocalWorkspaceFile) ([]LocalWorkspaceFil
 	return results, nil
 }
 
+func ApplyPersistentHashCache(snapshot LocalWorkspaceSnapshot, cache *PersistentHashCache) LocalWorkspaceSnapshot {
+	if cache == nil {
+		return snapshot
+	}
+	result := cloneLocalWorkspaceSnapshot(snapshot)
+	if result.HashedFiles == nil {
+		result.HashedFiles = make(map[string]LocalWorkspaceFile)
+	}
+
+	for path, file := range result.Files {
+		if file.Entry.ContentHash != "" {
+			continue
+		}
+		if hashValue, ok := cache.Lookup(file); ok {
+			file.Entry.ContentHash = hashValue
+			result.Files[path] = file
+			result.HashedFiles[path] = file
+		}
+	}
+
+	updatedEntries := make(map[string]proto.ManifestEntry, len(result.Files)+len(result.Dirs))
+	for path, entry := range result.Dirs {
+		updatedEntries[path] = entry
+	}
+	for path, file := range result.Files {
+		updatedEntries[path] = file.Entry
+	}
+	result.Entries = make([]proto.ManifestEntry, 0, len(updatedEntries))
+	for _, path := range sortedWorkspacePaths(updatedEntries) {
+		result.Entries = append(result.Entries, updatedEntries[path])
+	}
+
+	if allWorkspaceFilesHashed(result) {
+		contentFingerprint, err := fingerprintEntries(result.Entries, true)
+		if err == nil {
+			result.ContentFingerprint = contentFingerprint
+		}
+	}
+
+	return result
+}
+
 func cloneLocalWorkspaceSnapshot(snapshot LocalWorkspaceSnapshot) LocalWorkspaceSnapshot {
 	cloned := LocalWorkspaceSnapshot{
 		WorkspaceInstanceID: snapshot.WorkspaceInstanceID,

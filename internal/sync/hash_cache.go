@@ -26,6 +26,10 @@ type PersistentHashCache struct {
 	misses  uint64
 }
 
+func LoadPersistentHashCache(workspaceInstanceID string) (*PersistentHashCache, error) {
+	return loadPersistentHashCache(workspaceInstanceID)
+}
+
 func loadPersistentHashCache(workspaceInstanceID string) (*PersistentHashCache, error) {
 	if workspaceInstanceID == "" {
 		return &PersistentHashCache{records: make(map[string]persistentHashRecord)}, nil

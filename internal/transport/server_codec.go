@@ -14,6 +14,37 @@ import (
 	"symterm/internal/proto"
 )
 
+func (s *Server) readBinaryPayload(request Request) (Request, error) {
+	var lengthGetter struct {
+		DataLength int64 `json:"data_length"`
+	}
+	if err := json.Unmarshal(request.Params, &lengthGetter); err != nil {
+		return request, err
+	}
+	if lengthGetter.DataLength <= 0 {
+		return request, nil
+	}
+
+	rawData := make([]byte, lengthGetter.DataLength)
+	if _, err := io.ReadFull(s.reader, rawData); err != nil {
+		return request, err
+	}
+
+	var paramsMap map[string]any
+	if err := json.Unmarshal(request.Params, &paramsMap); err != nil {
+		return request, err
+	}
+	paramsMap["data"] = rawData
+	delete(paramsMap, "data_length")
+
+	newParams, err := json.Marshal(paramsMap)
+	if err != nil {
+		return request, err
+	}
+	request.Params = newParams
+	return request, nil
+}
+
 type Server struct {
 	service        serverService
 	reader         *bufio.Reader
@@ -140,6 +171,46 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 		if request.Method == "hello" {
 			controlClientID = ""
+		}
+
+		if request.Method == "apply_chunk" {
+			var err error
+			request, err = s.readBinaryPayload(request)
+			if err != nil {
+				if writeErr := s.writeResponse(errorResponse(request.ID, err)); writeErr != nil {
+					return writeErr
+				}
+				continue
+			}
+		}
+
+		// Async dispatch routes: process in a goroutine to avoid blocking the serve loop.
+		if route, ok := s.dispatchRoutes[request.Method]; ok && route.async {
+			s.streamWG.Add(1)
+			go func(req Request) {
+				defer s.streamWG.Done()
+				asyncStartedAt := time.Now()
+				s.trace("server async dispatch begin id=%d method=%s client_id=%q", req.ID, req.Method, req.ClientID)
+				response, helloClientID := s.dispatch(serveCtx, req)
+				if helloClientID != "" {
+					s.trace("server async dispatch unexpected hello_client_id id=%d method=%s", req.ID, req.Method)
+				}
+				if response.Error != nil {
+					s.trace("server async dispatch end id=%d method=%s error_code=%s duration_ms=%d", req.ID, req.Method, response.Error.Code, time.Since(asyncStartedAt).Milliseconds())
+				} else {
+					s.trace("server async dispatch end id=%d method=%s duration_ms=%d", req.ID, req.Method, time.Since(asyncStartedAt).Milliseconds())
+				}
+				if controlClientID != "" {
+					s.service.NoteSessionActivity(controlClientID)
+					s.trace("server async noted session activity client_id=%s", controlClientID)
+				}
+				if err := s.writeResponse(response); err != nil {
+					s.trace("server async write response failed id=%d method=%s error=%v", req.ID, req.Method, err)
+				} else {
+					s.trace("server async response sent id=%d method=%s", req.ID, req.Method)
+				}
+			}(request)
+			continue
 		}
 
 		startedAt := time.Now()

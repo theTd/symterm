@@ -113,6 +113,12 @@ func (u ProjectSessionUseCase) ConnectProjectSession(ctx context.Context) (Conne
 	localSnapshot.WorkspaceInstanceID = workspaceInstanceID
 	u.tracef("workspace instance id=%s", workspaceInstanceID)
 
+	cache, _ := workspacesync.LoadPersistentHashCache(workspaceInstanceID)
+	if cache != nil {
+		localSnapshot = workspacesync.ApplyPersistentHashCache(localSnapshot, cache)
+		u.tracef("pre-loaded %d cached hashes into initial manifest", len(localSnapshot.HashedFiles))
+	}
+
 	var hello control.HelloResponse
 	u.tracef(
 		"hello request project=%s transport=%s workspace_root=%q",

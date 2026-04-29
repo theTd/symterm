@@ -216,6 +216,8 @@ type SyncCapabilities struct {
 	DeleteBatch         bool   `json:"delete_batch"`
 	UploadBundle        bool   `json:"upload_bundle"`
 	PersistentHashCache bool   `json:"persistent_hash_cache"`
+	Compression         string `json:"compression,omitempty"`
+	BinaryUpload        bool   `json:"binary_upload,omitempty"`
 }
 
 type ConfirmReconcileRequest struct {
@@ -323,10 +325,12 @@ type BeginFileResponse struct {
 }
 
 type ApplyChunkRequest struct {
-	FileID   string
-	Offset   int64
-	Data     []byte
-	Checksum string
+	FileID      string
+	Offset      int64
+	Data        []byte
+	Checksum    string
+	Compression string `json:"compression,omitempty"`
+	DataLength  int64  `json:"data_length,omitempty"`
 }
 
 type CommitFileRequest struct {
@@ -378,6 +382,7 @@ type UploadBundleFile struct {
 	StatFingerprint string
 	ContentHash     string
 	Data            []byte
+	Compression     string `json:"compression,omitempty"`
 }
 
 type UploadBundleCommitRequest struct {

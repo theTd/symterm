@@ -8,9 +8,18 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"symterm/internal/proto"
 )
+
+// DefaultClientIdleTimeout bounds how long Client.readLoop will block on a
+// silently dead peer (no FIN/RST, no bytes, no JSON-RPC reply). When the
+// timeout elapses, the underlying closer (if any) is closed which forces the
+// blocked ReadBytes to return and unwedges every pending caller. Long-lived
+// JSON-RPC streams that legitimately idle for longer than this should arrange
+// their own keepalive at the SSH or application layer.
+const DefaultClientIdleTimeout = 5 * time.Minute
 
 type Client struct {
 	mu           sync.Mutex
@@ -23,6 +32,8 @@ type Client struct {
 	done         chan struct{}
 	doneOnce     sync.Once
 	readErr      error
+	closer       io.Closer
+	idleTimeout  time.Duration
 }
 
 func NewClient(reader io.Reader, writer io.Writer) *Client {
@@ -36,7 +47,29 @@ func NewClient(reader io.Reader, writer io.Writer) *Client {
 	return client
 }
 
+// NewClientWithIdleTimeout returns a Client that closes the supplied closer
+// when no bytes have been read from the underlying reader for idleTimeout. A
+// zero idleTimeout disables the watchdog; a nil closer is also a no-op (the
+// caller must supply something that can sever the connection for the timeout
+// to actually unwedge a stuck readLoop).
+func NewClientWithIdleTimeout(reader io.Reader, writer io.Writer, closer io.Closer, idleTimeout time.Duration) *Client {
+	client := &Client{
+		reader:      bufio.NewReader(reader),
+		writer:      bufio.NewWriter(writer),
+		pending:     make(map[uint64]chan Response),
+		done:        make(chan struct{}),
+		closer:      closer,
+		idleTimeout: idleTimeout,
+	}
+	client.ensureReadLoop()
+	return client
+}
+
 func (c *Client) Call(ctx context.Context, method string, clientID string, params any, result any) error {
+	return c.CallWithBinaryPayload(ctx, method, clientID, params, result, nil)
+}
+
+func (c *Client) CallWithBinaryPayload(ctx context.Context, method string, clientID string, params any, result any, payload []byte) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -51,6 +84,18 @@ func (c *Client) Call(ctx context.Context, method string, clientID string, param
 
 	if err := c.writeRequest(request); err != nil {
 		return err
+	}
+	if len(payload) > 0 {
+		c.writeMu.Lock()
+		if _, err := c.writer.Write(payload); err != nil {
+			c.writeMu.Unlock()
+			return proto.NormalizeError(err)
+		}
+		if err := c.writer.Flush(); err != nil {
+			c.writeMu.Unlock()
+			return proto.NormalizeError(err)
+		}
+		c.writeMu.Unlock()
 	}
 
 	response, err := c.awaitResponse(ctx, request.ID, replies)
@@ -248,7 +293,19 @@ func (c *Client) ensureReadLoop() {
 
 func (c *Client) readLoop() {
 	for {
+		var watchdog *time.Timer
+		if c.idleTimeout > 0 && c.closer != nil {
+			watchdog = time.AfterFunc(c.idleTimeout, func() {
+				if !c.hasPendingCalls() {
+					return
+				}
+				_ = c.closer.Close()
+			})
+		}
 		replyLine, err := c.reader.ReadBytes('\n')
+		if watchdog != nil {
+			watchdog.Stop()
+		}
 		if err != nil {
 			c.failPending(err)
 			return
@@ -268,6 +325,12 @@ func (c *Client) readLoop() {
 		}
 		replies <- response
 	}
+}
+
+func (c *Client) hasPendingCalls() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.pending) > 0
 }
 
 func (c *Client) failPending(err error) {

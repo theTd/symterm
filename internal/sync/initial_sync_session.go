@@ -1,12 +1,15 @@
 package sync
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"io"
 	"os"
 	"sort"
 	"strings"
+	stdsync "sync"
 	"time"
 
 	"symterm/internal/diagnostic"
@@ -14,12 +17,12 @@ import (
 	"symterm/internal/transport"
 )
 
-const syncChunkSize = 512 * 1024
+const syncChunkSize = 4 * 1024 * 1024
 const initialSyncMaxAttempts = 3
 const syncManifestBatchSize = 512
-const syncBundleFileThreshold = 256 * 1024
-const syncBundleTargetBytes = 8 * 1024 * 1024
-const syncBundleMaxFiles = 256
+const syncBundleFileThreshold = 1024 * 1024
+const syncBundleTargetBytes = 64 * 1024 * 1024
+const syncBundleMaxFiles = 1024
 
 type InitialSyncSessionRunner struct {
 	Capabilities proto.SyncCapabilities
@@ -165,6 +168,17 @@ func (r InitialSyncSessionRunner) performSyncV2(
 	return proto.ProjectSnapshot{}, proto.NewError(proto.ErrSyncRescanMismatch, "workspace changed during initial sync")
 }
 
+func supportsCompression(capabilities proto.SyncCapabilities) string {
+	if capabilities.Compression == "gzip" {
+		return "gzip"
+	}
+	return ""
+}
+
+func supportsBinaryUpload(capabilities proto.SyncCapabilities) bool {
+	return capabilities.BinaryUpload
+}
+
 func (r InitialSyncSessionRunner) performInitialSyncAttemptV1(
 	ctx context.Context,
 	client *transport.Client,
@@ -259,7 +273,7 @@ func (r InitialSyncSessionRunner) performInitialSyncAttemptV1(
 	}
 	for _, localFile := range uploadFiles {
 		observer.Operationf("Uploading %s", localFile.Path)
-		if err := UploadLocalFile(ctx, client, clientID, syncEpoch, localFile, stats); err != nil {
+		if err := UploadLocalFile(ctx, client, clientID, syncEpoch, localFile, supportsCompression(r.Capabilities), supportsBinaryUpload(r.Capabilities), stats); err != nil {
 			return proto.ProjectSnapshot{}, err
 		}
 		completedUploads++
@@ -369,7 +383,7 @@ func (r InitialSyncSessionRunner) performInitialSyncAttemptV2(
 	}
 	for _, bundle := range bundles {
 		observer.Operationf("Uploading bundle with %d files", len(bundle.files))
-		if err := uploadBundleFiles(ctx, client, clientID, session.SessionID, syncEpoch, bundle.files, stats); err != nil {
+		if err := uploadBundleFiles(ctx, client, clientID, session.SessionID, syncEpoch, bundle.files, supportsCompression(r.Capabilities), stats); err != nil {
 			return proto.ProjectSnapshot{}, err
 		}
 		stats.uploadBundles++
@@ -380,7 +394,7 @@ func (r InitialSyncSessionRunner) performInitialSyncAttemptV2(
 	}
 	for _, localFile := range largeFiles {
 		observer.Operationf("Uploading %s", localFile.Path)
-		if err := UploadLocalFile(ctx, client, clientID, syncEpoch, localFile, stats); err != nil {
+		if err := UploadLocalFile(ctx, client, clientID, syncEpoch, localFile, supportsCompression(r.Capabilities), supportsBinaryUpload(r.Capabilities), stats); err != nil {
 			return proto.ProjectSnapshot{}, err
 		}
 		completedUploads++
@@ -494,7 +508,7 @@ func reportSyncProgress(
 	})
 }
 
-func UploadLocalFile(ctx context.Context, client *transport.Client, clientID string, syncEpoch uint64, localFile LocalWorkspaceFile, stats *syncTraceStats) error {
+func UploadLocalFile(ctx context.Context, client *transport.Client, clientID string, syncEpoch uint64, localFile LocalWorkspaceFile, compression string, binaryUpload bool, stats *syncTraceStats) error {
 	var started proto.BeginFileResponse
 	if err := trackedCall(ctx, client, clientID, "begin_file", proto.BeginFileRequest{
 		SyncEpoch:       syncEpoch,
@@ -521,17 +535,44 @@ func UploadLocalFile(ctx context.Context, client *transport.Client, clientID str
 	for {
 		n, readErr := file.Read(buf)
 		if n > 0 {
-			if err := trackedCall(ctx, client, clientID, "apply_chunk", proto.ApplyChunkRequest{
-				FileID:   started.FileID,
-				Offset:   offset,
-				Data:     append([]byte(nil), buf[:n]...),
-				Checksum: "",
-			}, nil, stats); err != nil {
-				diagnostic.Cleanup(diagnostic.Default(), "abort file upload "+localFile.Path, trackedCall(ctx, client, clientID, "abort_file", proto.AbortFileRequest{
-					FileID: started.FileID,
-					Reason: err.Error(),
-				}, nil, stats))
-				return err
+			chunkData := append([]byte(nil), buf[:n]...)
+			chunkCompression := ""
+			if compression != "" {
+				compressed, comp, err := compressData(chunkData, compression)
+				if err == nil {
+					chunkData = compressed
+					chunkCompression = comp
+				}
+			}
+			if binaryUpload {
+				if err := trackedCallWithPayload(ctx, client, clientID, "apply_chunk", proto.ApplyChunkRequest{
+					FileID:      started.FileID,
+					Offset:      offset,
+					Data:        nil,
+					Checksum:    "",
+					Compression: chunkCompression,
+					DataLength:  int64(len(chunkData)),
+				}, nil, chunkData, stats); err != nil {
+					diagnostic.Cleanup(diagnostic.Default(), "abort file upload "+localFile.Path, trackedCall(ctx, client, clientID, "abort_file", proto.AbortFileRequest{
+						FileID: started.FileID,
+						Reason: err.Error(),
+					}, nil, stats))
+					return err
+				}
+			} else {
+				if err := trackedCall(ctx, client, clientID, "apply_chunk", proto.ApplyChunkRequest{
+					FileID:      started.FileID,
+					Offset:      offset,
+					Data:        chunkData,
+					Checksum:    "",
+					Compression: chunkCompression,
+				}, nil, stats); err != nil {
+					diagnostic.Cleanup(diagnostic.Default(), "abort file upload "+localFile.Path, trackedCall(ctx, client, clientID, "abort_file", proto.AbortFileRequest{
+						FileID: started.FileID,
+						Reason: err.Error(),
+					}, nil, stats))
+					return err
+				}
 			}
 			offset += int64(n)
 		}
@@ -557,11 +598,37 @@ func UploadLocalFile(ctx context.Context, client *transport.Client, clientID str
 	}, nil, stats)
 }
 
+func compressData(data []byte, compression string) ([]byte, string, error) {
+	if compression == "" {
+		return data, "", nil
+	}
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write(data); err != nil {
+		return nil, "", err
+	}
+	if err := w.Close(); err != nil {
+		return nil, "", err
+	}
+	compressed := buf.Bytes()
+	if len(compressed) < len(data) {
+		return compressed, compression, nil
+	}
+	return data, "", nil
+}
+
 func trackedCall(ctx context.Context, client *transport.Client, clientID string, method string, params any, result any, stats *syncTraceStats) error {
 	if stats != nil {
 		stats.rpcCount++
 	}
 	return client.Call(ctx, method, clientID, params, result)
+}
+
+func trackedCallWithPayload(ctx context.Context, client *transport.Client, clientID string, method string, params any, result any, payload []byte, stats *syncTraceStats) error {
+	if stats != nil {
+		stats.rpcCount++
+	}
+	return client.CallWithBinaryPayload(ctx, method, clientID, params, result, payload)
 }
 
 func sendManifestBatches(
@@ -573,32 +640,65 @@ func sendManifestBatches(
 	final bool,
 	stats *syncTraceStats,
 ) error {
+	type batchSpec struct {
+		entries []proto.ManifestEntry
+		isFinal bool
+	}
+
+	var batches []batchSpec
 	if len(entries) == 0 {
 		if !final {
 			return nil
 		}
-		if err := trackedCall(ctx, client, clientID, "sync_manifest_batch", proto.SyncManifestBatchRequest{
-			SessionID: sessionID,
-			Final:     true,
-		}, nil, stats); err != nil {
-			return err
+		batches = append(batches, batchSpec{entries: nil, isFinal: true})
+	} else {
+		for start := 0; start < len(entries); start += syncManifestBatchSize {
+			end := start + syncManifestBatchSize
+			if end > len(entries) {
+				end = len(entries)
+			}
+			batches = append(batches, batchSpec{
+				entries: append([]proto.ManifestEntry(nil), entries[start:end]...),
+				isFinal: final && end == len(entries),
+			})
 		}
-		stats.manifestBatches++
-		return nil
 	}
-	for start := 0; start < len(entries); start += syncManifestBatchSize {
-		end := start + syncManifestBatchSize
-		if end > len(entries) {
-			end = len(entries)
-		}
-		if err := trackedCall(ctx, client, clientID, "sync_manifest_batch", proto.SyncManifestBatchRequest{
-			SessionID: sessionID,
-			Entries:   append([]proto.ManifestEntry(nil), entries[start:end]...),
-			Final:     final && end == len(entries),
-		}, nil, stats); err != nil {
-			return err
-		}
-		stats.manifestBatches++
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var wg stdsync.WaitGroup
+	errCh := make(chan error, 1)
+
+	for _, b := range batches {
+		wg.Add(1)
+		go func(spec batchSpec) {
+			defer wg.Done()
+			if err := client.Call(ctx, "sync_manifest_batch", clientID, proto.SyncManifestBatchRequest{
+				SessionID: sessionID,
+				Entries:   spec.entries,
+				Final:     spec.isFinal,
+			}, nil); err != nil {
+				select {
+				case errCh <- err:
+					cancel()
+				default:
+				}
+			}
+		}(b)
+	}
+
+	go func() {
+		wg.Wait()
+		close(errCh)
+	}()
+
+	if err := <-errCh; err != nil {
+		return err
+	}
+	if stats != nil {
+		stats.manifestBatches += uint64(len(batches))
+		stats.rpcCount += uint64(len(batches))
 	}
 	return nil
 }
@@ -667,6 +767,7 @@ func uploadBundleFiles(
 	sessionID string,
 	syncEpoch uint64,
 	files []LocalWorkspaceFile,
+	compression string,
 	stats *syncTraceStats,
 ) error {
 	var started proto.UploadBundleBeginResponse
@@ -686,12 +787,21 @@ func uploadBundleFiles(
 		if err != nil {
 			return err
 		}
+		fileCompression := ""
+		if compression != "" {
+			compressed, comp, err := compressData(data, compression)
+			if err == nil {
+				data = compressed
+				fileCompression = comp
+			}
+		}
 		request.Files = append(request.Files, proto.UploadBundleFile{
 			Path:            localFile.Path,
 			Metadata:        localFile.Entry.Metadata,
 			StatFingerprint: localFile.Entry.StatFingerprint,
 			ContentHash:     localFile.Entry.ContentHash,
 			Data:            data,
+			Compression:     fileCompression,
 		})
 	}
 	return trackedCall(ctx, client, clientID, "upload_bundle_commit", request, nil, stats)

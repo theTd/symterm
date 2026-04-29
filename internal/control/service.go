@@ -226,5 +226,7 @@ func defaultSyncCapabilities() proto.SyncCapabilities {
 		DeleteBatch:         true,
 		UploadBundle:        true,
 		PersistentHashCache: true,
+		Compression:         "gzip",
+		BinaryUpload:        true,
 	}
 }

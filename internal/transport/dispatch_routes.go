@@ -8,6 +8,7 @@ import (
 
 type dispatchRoute struct {
 	invoke func(context.Context, Request) (Response, string)
+	async  bool
 }
 
 type completeInitialSyncParams struct {
@@ -82,7 +83,7 @@ func (s *Server) newDispatchRoutes() map[string]dispatchRoute {
 		"scan_manifest": newDispatchNoResultRoute(func(_ context.Context, request Request, params proto.ScanManifestRequest) error {
 			return s.service.ScanManifest(request.ClientID, params)
 		}),
-		"sync_manifest_batch": newDispatchNoResultRoute(func(_ context.Context, request Request, params proto.SyncManifestBatchRequest) error {
+		"sync_manifest_batch": newAsyncDispatchNoResultRoute(func(_ context.Context, request Request, params proto.SyncManifestBatchRequest) error {
 			return s.service.SyncManifestBatch(request.ClientID, params)
 		}),
 		"plan_manifest_hashes": newDispatchRoute(func(_ context.Context, request Request, _ struct{}) (any, string, error) {
@@ -120,7 +121,7 @@ func (s *Server) newDispatchRoutes() map[string]dispatchRoute {
 			result, err := s.service.UploadBundleBegin(request.ClientID, params)
 			return result, "", err
 		}),
-		"upload_bundle_commit": newDispatchNoResultRoute(func(_ context.Context, request Request, params proto.UploadBundleCommitRequest) error {
+		"upload_bundle_commit": newAsyncDispatchNoResultRoute(func(_ context.Context, request Request, params proto.UploadBundleCommitRequest) error {
 			return s.service.UploadBundleCommit(request.ClientID, params)
 		}),
 		"finalize_sync": newDispatchRoute(func(_ context.Context, request Request, params proto.FinalizeSyncRequest) (any, string, error) {
@@ -199,6 +200,20 @@ func newDispatchNoResultRoute[Params any](handle func(context.Context, Request, 
 		}
 		return struct{}{}, "", nil
 	})
+}
+
+func newAsyncDispatchRoute[Params any](handle func(context.Context, Request, Params) (any, string, error)) dispatchRoute {
+	return dispatchRoute{
+		invoke: newDispatchRoute(handle).invoke,
+		async:  true,
+	}
+}
+
+func newAsyncDispatchNoResultRoute[Params any](handle func(context.Context, Request, Params) error) dispatchRoute {
+	return dispatchRoute{
+		invoke: newDispatchNoResultRoute(handle).invoke,
+		async:  true,
+	}
 }
 
 func writeDispatchResult(requestID uint64, value any) Response {
